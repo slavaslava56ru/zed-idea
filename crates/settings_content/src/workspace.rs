@@ -21,7 +21,7 @@ pub struct WorkspaceSettingsContent {
     pub text_rendering_mode: Option<TextRenderingMode>,
     /// Layout mode for the bottom dock
     ///
-    /// Default: contained
+    /// Default: full
     pub bottom_dock_layout: Option<BottomDockLayout>,
     /// Direction to split horizontally.
     ///
@@ -313,9 +313,9 @@ pub struct ActivePaneModifiers {
 #[serde(rename_all = "snake_case")]
 pub enum BottomDockLayout {
     /// Contained between the left and right docks
-    #[default]
     Contained,
     /// Takes up the full width of the window
+    #[default]
     Full,
     /// Extends under the left dock while snapping to the right dock
     LeftAligned,

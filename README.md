@@ -10,6 +10,8 @@ This fork currently differs from upstream Zed in a few JetBrains IDEA-inspired w
 - Scratch files similar to JetBrains IDEA
 - Project search behavior closer to IDEA
 - Local history for file changes
+- Left and right tool-window rails for dock panels
+- Full-width bottom dock by default for terminal, Git, diagnostics, and debugger panels
 
 ---
 

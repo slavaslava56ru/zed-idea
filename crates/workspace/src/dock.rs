@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use settings::{Settings, SettingsStore};
 use std::sync::Arc;
 use ui::{
-    ContextMenu, CountBadge, Divider, DividerColor, IconButton, Tooltip, prelude::*,
-    right_click_menu,
+    ButtonLike, Color, ContextMenu, CountBadge, Divider, DividerColor, Icon, IconButton, Tooltip,
+    prelude::*, rems_from_px, right_click_menu,
 };
 use util::ResultExt as _;
 
@@ -39,6 +39,9 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn position_is_valid(&self, position: DockPosition) -> bool;
     fn set_position(&mut self, position: DockPosition, window: &mut Window, cx: &mut Context<Self>);
     fn default_size(&self, window: &Window, cx: &App) -> Pixels;
+    fn minimum_size(&self, _window: &Window, _cx: &App) -> Option<Pixels> {
+        None
+    }
     fn initial_size_state(&self, _window: &Window, _cx: &App) -> PanelSizeState {
         PanelSizeState::default()
     }
@@ -98,6 +101,7 @@ pub trait PanelHandle: Send + Sync {
     fn remote_id(&self) -> Option<proto::PanelId>;
     fn pane(&self, cx: &App) -> Option<Entity<Pane>>;
     fn default_size(&self, window: &Window, cx: &App) -> Pixels;
+    fn minimum_size(&self, window: &Window, cx: &App) -> Option<Pixels>;
     fn initial_size_state(&self, window: &Window, cx: &App) -> PanelSizeState;
     fn size_state_changed(&self, window: &mut Window, cx: &mut App);
     fn supports_flexible_size(&self, cx: &App) -> bool;
@@ -179,6 +183,10 @@ where
 
     fn default_size(&self, window: &Window, cx: &App) -> Pixels {
         self.read(cx).default_size(window, cx)
+    }
+
+    fn minimum_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
+        self.read(cx).minimum_size(window, cx)
     }
 
     fn initial_size_state(&self, window: &Window, cx: &App) -> PanelSizeState {
@@ -323,8 +331,16 @@ struct PanelEntry {
     _subscriptions: [Subscription; 3],
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PanelButtonsLayout {
+    #[default]
+    StatusBar,
+    Rail,
+}
+
 pub struct PanelButtons {
     dock: Entity<Dock>,
+    layout: PanelButtonsLayout,
     _settings_subscription: Subscription,
 }
 
@@ -338,7 +354,11 @@ fn resize_panel_entry(
     window: &mut Window,
     cx: &mut App,
 ) -> (&'static str, PanelSizeState) {
-    let size = size.map(|size| size.max(RESIZE_HANDLE_SIZE).round());
+    let minimum_size = entry
+        .panel
+        .minimum_size(window, cx)
+        .unwrap_or(RESIZE_HANDLE_SIZE);
+    let size = size.map(|size| size.max(minimum_size).round());
     let use_flex = entry.panel.has_flexible_size(window, cx) && position.axis() == Axis::Horizontal;
     if use_flex {
         entry.size_state.flex = flex;
@@ -1005,6 +1025,10 @@ impl Dock {
         }
     }
 
+    pub(crate) fn has_panels(&self) -> bool {
+        !self.panel_entries.is_empty()
+    }
+
     pub(crate) fn load_persisted_size_state(
         workspace: &Workspace,
         panel_key: &'static str,
@@ -1134,11 +1158,16 @@ impl Render for Dock {
 }
 
 impl PanelButtons {
-    pub fn new(dock: Entity<Dock>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        dock: Entity<Dock>,
+        layout: PanelButtonsLayout,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.observe(&dock, |_, _, cx| cx.notify()).detach();
         let settings_subscription = cx.observe_global::<SettingsStore>(|_, cx| cx.notify());
         Self {
             dock,
+            layout,
             _settings_subscription: settings_subscription,
         }
     }
@@ -1150,10 +1179,17 @@ impl Render for PanelButtons {
         let active_index = dock.active_panel_index;
         let is_open = dock.is_open;
         let dock_position = dock.position;
+        let layout = self.layout;
 
-        let (menu_anchor, menu_attach) = match dock.position {
-            DockPosition::Left => (Corner::BottomLeft, Corner::TopLeft),
-            DockPosition::Bottom | DockPosition::Right => (Corner::BottomRight, Corner::TopRight),
+        let (menu_anchor, menu_attach) = match (self.layout, dock.position) {
+            (PanelButtonsLayout::Rail, DockPosition::Right) => (Corner::TopRight, Corner::TopLeft),
+            (PanelButtonsLayout::Rail, DockPosition::Left | DockPosition::Bottom) => {
+                (Corner::TopLeft, Corner::TopRight)
+            }
+            (_, DockPosition::Left) => (Corner::BottomLeft, Corner::TopLeft),
+            (_, DockPosition::Bottom | DockPosition::Right) => {
+                (Corner::BottomRight, Corner::TopRight)
+            }
         };
 
         let dock_entity = self.dock.clone();
@@ -1173,10 +1209,14 @@ impl Render for PanelButtons {
                     .log_err()?;
                 let name = entry.panel.persistent_name();
                 let panel = entry.panel.clone();
+                let panel_for_menu = panel.clone();
+                let panel_for_trigger = panel.clone();
                 let supports_flexible = panel.supports_flexible_size(cx);
                 let currently_flexible = panel.has_flexible_size(window, cx);
                 let dock_for_menu = dock_entity.clone();
+                let dock_for_trigger = dock_entity.clone();
                 let workspace_for_menu = workspace.clone();
+                let workspace_for_trigger = workspace.clone();
 
                 let is_active_button = Some(i) == active_index && is_open;
                 let (action, tooltip) = if is_active_button {
@@ -1207,9 +1247,9 @@ impl Render for PanelButtons {
                             ContextMenu::build(window, cx, |mut menu, _, cx| {
                                 let mut has_position_entries = false;
                                 for position in POSITIONS {
-                                    if panel.position_is_valid(position, cx) {
+                                    if panel_for_menu.position_is_valid(position, cx) {
                                         let is_current = position == dock_position;
-                                        let panel = panel.clone();
+                                        let panel = panel_for_menu.clone();
                                         menu = menu.toggleable_entry(
                                             format!("Dock {}", position.label()),
                                             is_current,
@@ -1283,21 +1323,85 @@ impl Render for PanelButtons {
                         .trigger(move |is_active, _window, _cx| {
                             // Include active state in element ID to invalidate the cached
                             // tooltip when panel state changes (e.g., via keyboard shortcut)
-                            let button = IconButton::new((name, is_active_button as u64), icon)
-                                .icon_size(IconSize::Small)
-                                .toggle_state(is_active_button)
-                                .on_click({
-                                    let action = action.boxed_clone();
-                                    move |_, window, cx| {
-                                        window.focus(&focus_handle, cx);
-                                        window.dispatch_action(action.boxed_clone(), cx)
+                            let click_handler = || {
+                                let action = action.boxed_clone();
+                                let dock_entity = dock_for_trigger.clone();
+                                let panel = panel_for_trigger.clone();
+                                let workspace = workspace_for_trigger.clone();
+                                move |_event: &gpui::ClickEvent,
+                                      window: &mut Window,
+                                      cx: &mut App| {
+                                    window.focus(&focus_handle, cx);
+
+                                    match layout {
+                                        PanelButtonsLayout::StatusBar => {
+                                            window.dispatch_action(action.boxed_clone(), cx);
+                                        }
+                                        PanelButtonsLayout::Rail => {
+                                            if let Some(workspace) = workspace.upgrade() {
+                                                workspace.update(cx, |workspace, cx| {
+                                                    workspace.dismiss_zoomed_items_to_reveal(
+                                                        Some(dock_position),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                    dock_entity.update(cx, |dock, cx| {
+                                                        if is_active_button {
+                                                            dock.set_open(false, window, cx);
+                                                        } else {
+                                                            dock.activate_panel(i, window, cx);
+                                                            dock.set_open(true, window, cx);
+                                                        }
+                                                    });
+                                                    workspace.serialize_workspace(window, cx);
+                                                });
+
+                                                if !is_active_button {
+                                                    panel.panel_focus_handle(cx).focus(window, cx);
+                                                }
+                                            }
+                                        }
                                     }
-                                })
-                                .when(!is_active, |this| {
-                                    this.tooltip(move |_window, cx| {
-                                        Tooltip::for_action(tooltip.clone(), &*action, cx)
-                                    })
-                                });
+                                }
+                            };
+
+                            let button = match layout {
+                                PanelButtonsLayout::StatusBar => {
+                                    IconButton::new((name, is_active_button as u64), icon)
+                                        .icon_size(IconSize::Small)
+                                        .toggle_state(is_active_button)
+                                        .on_click(click_handler())
+                                        .when(!is_active, |this| {
+                                            let action = action.boxed_clone();
+                                            this.tooltip(move |_window, cx| {
+                                                Tooltip::for_action(tooltip.clone(), &*action, cx)
+                                            })
+                                        })
+                                        .into_any_element()
+                                }
+                                PanelButtonsLayout::Rail => {
+                                    ButtonLike::new((name, is_active_button as u64))
+                                        .width(px(32.))
+                                        .height(px(32.).into())
+                                        .child(
+                                            Icon::new(icon)
+                                                .size(IconSize::Custom(rems_from_px(28.)))
+                                                .color(if is_active_button {
+                                                    Color::Selected
+                                                } else {
+                                                    Color::Default
+                                                }),
+                                        )
+                                        .on_click(click_handler())
+                                        .when(!is_active, |this| {
+                                            let action = action.boxed_clone();
+                                            this.tooltip(move |_window, cx| {
+                                                Tooltip::for_action(tooltip.clone(), &*action, cx)
+                                            })
+                                        })
+                                        .into_any_element()
+                                }
+                            };
 
                             div().relative().child(button).when_some(
                                 icon_label
@@ -1317,18 +1421,26 @@ impl Render for PanelButtons {
 
         let has_buttons = !buttons.is_empty();
 
-        h_flex()
-            .gap_1()
-            .when(
-                has_buttons
-                    && (dock.position == DockPosition::Bottom
-                        || dock.position == DockPosition::Right),
-                |this| this.child(Divider::vertical().color(DividerColor::Border)),
-            )
-            .children(buttons)
-            .when(has_buttons && dock.position == DockPosition::Left, |this| {
-                this.child(Divider::vertical().color(DividerColor::Border))
-            })
+        match self.layout {
+            PanelButtonsLayout::StatusBar => h_flex()
+                .gap_1()
+                .when(
+                    has_buttons
+                        && (dock.position == DockPosition::Bottom
+                            || dock.position == DockPosition::Right),
+                    |this| this.child(Divider::vertical().color(DividerColor::Border)),
+                )
+                .children(buttons)
+                .when(has_buttons && dock.position == DockPosition::Left, |this| {
+                    this.child(Divider::vertical().color(DividerColor::Border))
+                })
+                .into_any_element(),
+            PanelButtonsLayout::Rail => v_flex()
+                .gap_2()
+                .items_center()
+                .children(buttons)
+                .into_any_element(),
+        }
     }
 }
 

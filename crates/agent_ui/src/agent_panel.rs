@@ -2794,6 +2794,8 @@ fn agent_panel_dock_position(cx: &App) -> DockPosition {
     AgentSettings::get_global(cx).dock.into()
 }
 
+const MIN_AGENT_PANEL_WIDTH: Pixels = px(320.);
+
 pub enum AgentPanelEvent {
     ActiveViewChanged,
     ThreadFocused,
@@ -2835,6 +2837,13 @@ impl Panel for AgentPanel {
         match self.position(window, cx) {
             DockPosition::Left | DockPosition::Right => settings.default_width,
             DockPosition::Bottom => settings.default_height,
+        }
+    }
+
+    fn minimum_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
+        match self.position(window, cx) {
+            DockPosition::Left | DockPosition::Right => Some(MIN_AGENT_PANEL_WIDTH),
+            DockPosition::Bottom => None,
         }
     }
 
