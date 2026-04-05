@@ -171,7 +171,7 @@ pub struct PreviewTabsSettingsContent {
     pub enable_preview_from_project_panel: Option<bool>,
     /// Whether to open tabs in preview mode when selected from the file finder.
     ///
-    /// Default: false
+    /// Default: true
     pub enable_preview_from_file_finder: Option<bool>,
     /// Whether to open tabs in preview mode when opened from a multibuffer.
     ///

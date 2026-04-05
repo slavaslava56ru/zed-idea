@@ -6855,6 +6855,76 @@ async fn test_search(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_search_excludes_scratch_worktree(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/dir"),
+        json!({
+            "one.rs": "const REAL: usize = 1;",
+        }),
+    )
+    .await;
+    fs.insert_tree(
+        path!("/scratch"),
+        json!({
+            "scratch.rs": "const SCRATCH: usize = 1;",
+        }),
+    )
+    .await;
+
+    let project = Project::test(
+        fs.clone(),
+        [path!("/dir").as_ref(), path!("/scratch").as_ref()],
+        cx,
+    )
+    .await;
+
+    assert_eq!(
+        search(
+            &project,
+            SearchQuery::text(
+                "REAL",
+                false,
+                true,
+                false,
+                Default::default(),
+                Default::default(),
+                false,
+                None
+            )
+            .unwrap(),
+            cx
+        )
+        .await
+        .unwrap(),
+        HashMap::from_iter([(path!("dir/one.rs").to_string(), vec![6..10])])
+    );
+
+    assert_eq!(
+        search(
+            &project,
+            SearchQuery::text(
+                "SCRATCH",
+                false,
+                true,
+                false,
+                Default::default(),
+                Default::default(),
+                false,
+                None
+            )
+            .unwrap(),
+            cx
+        )
+        .await
+        .unwrap(),
+        HashMap::<String, Vec<Range<usize>>>::default()
+    );
+}
+
+#[gpui::test]
 async fn test_search_with_inclusions(cx: &mut gpui::TestAppContext) {
     init_test(cx);
 

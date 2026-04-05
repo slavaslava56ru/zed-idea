@@ -1852,29 +1852,38 @@ impl DisplaySnapshot {
                 }
             });
 
-            let diagnostic_highlight = chunk
-                .diagnostic_severity
-                .filter(|severity| {
-                    self.diagnostics_max_severity
-                        .into_lsp()
-                        .is_some_and(|max_severity| severity <= &max_severity)
-                })
-                .map(|severity| HighlightStyle {
-                    fade_out: chunk
-                        .is_unnecessary
-                        .then_some(editor_style.unnecessary_code_fade),
+            let diagnostic_severity = chunk.diagnostic_severity.filter(|severity| {
+                self.diagnostics_max_severity
+                    .into_lsp()
+                    .is_some_and(|max_severity| severity <= &max_severity)
+            });
+
+            let diagnostic_highlight = (chunk.is_unnecessary || diagnostic_severity.is_some())
+                .then(|| HighlightStyle {
+                    color: chunk.is_unnecessary.then(|| {
+                        editor_style
+                            .syntax
+                            .style_for_name("comment")
+                            .and_then(|style| style.color)
+                            .unwrap_or(editor_style.text.color)
+                    }),
+                    fade_out: (!chunk.is_unnecessary).then_some(editor_style.unnecessary_code_fade),
                     underline: (chunk.underline
+                        && diagnostic_severity.is_some()
                         && editor_style.show_underlines
-                        && !(chunk.is_unnecessary && severity > lsp::DiagnosticSeverity::WARNING))
-                        .then(|| {
-                            let diagnostic_color =
-                                super::diagnostic_style(severity, &editor_style.status);
-                            UnderlineStyle {
-                                color: Some(diagnostic_color),
-                                thickness: 1.0.into(),
-                                wavy: true,
-                            }
-                        }),
+                        && !(chunk.is_unnecessary
+                            && diagnostic_severity > Some(lsp::DiagnosticSeverity::WARNING)))
+                    .then(|| {
+                        let diagnostic_color = super::diagnostic_style(
+                            diagnostic_severity.expect("checked is_some above"),
+                            &editor_style.status,
+                        );
+                        UnderlineStyle {
+                            color: Some(diagnostic_color),
+                            thickness: 1.0.into(),
+                            wavy: true,
+                        }
+                    }),
                     ..Default::default()
                 });
 

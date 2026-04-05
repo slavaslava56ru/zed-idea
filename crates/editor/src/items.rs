@@ -4,6 +4,7 @@ use crate::{
     ReportEditorEvent, SelectionEffects, ToPoint as _,
     display_map::HighlightKey,
     editor_settings::SeedQuerySetting,
+    local_history::save_local_history_snapshot,
     persistence::{EditorDb, SerializedEditor},
     scroll::{ScrollAnchor, ScrollOffset},
 };
@@ -903,12 +904,23 @@ impl Item for Editor {
                 .await?;
             }
 
+            let history_buffers = this.update(cx, |_, cx| {
+                buffers_to_save
+                    .iter()
+                    .filter_map(|buffer| buffer.read(cx).is_dirty().then_some(buffer.clone()))
+                    .collect::<Vec<_>>()
+            })?;
+
             if !buffers_to_save.is_empty() {
                 project
                     .update(cx, |project, cx| {
                         project.save_buffers(buffers_to_save.clone(), cx)
                     })
                     .await?;
+            }
+
+            for buffer in history_buffers {
+                save_local_history_snapshot(buffer, cx).await.log_err();
             }
 
             Ok(())
@@ -919,7 +931,7 @@ impl Item for Editor {
         &mut self,
         project: Entity<Project>,
         path: ProjectPath,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         let buffer = self
@@ -935,7 +947,15 @@ impl Item for Editor {
             cx,
         );
 
-        project.update(cx, |project, cx| project.save_buffer_as(buffer, path, cx))
+        let save = project.update(cx, |project, cx| {
+            project.save_buffer_as(buffer.clone(), path, cx)
+        });
+
+        cx.spawn_in(window, async move |_, cx| {
+            save.await?;
+            save_local_history_snapshot(buffer, cx).await.log_err();
+            Ok(())
+        })
     }
 
     fn reload(

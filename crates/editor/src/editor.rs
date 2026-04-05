@@ -31,6 +31,7 @@ mod inlays;
 pub mod items;
 mod jsx_tag_auto_close;
 mod linked_editing_ranges;
+mod local_history;
 mod lsp_ext;
 mod mouse_context_menu;
 pub mod movement;
@@ -348,6 +349,7 @@ pub fn init(cx: &mut App) {
             workspace.register_action(Editor::new_file_vertical);
             workspace.register_action(Editor::new_file_horizontal);
             workspace.register_action(Editor::cancel_language_server_work);
+            workspace.register_action(Editor::open_local_history);
             workspace.register_action(Editor::toggle_focus);
         },
     )
@@ -1305,6 +1307,8 @@ pub struct Editor {
     /// Counter for generating unique comment IDs.
     next_review_comment_id: usize,
     hovered_diff_hunk_row: Option<DisplayRow>,
+    always_show_diff_hunk_controls: bool,
+    show_diff_decorations: bool,
     pull_diagnostics_task: Task<()>,
     in_project_search: bool,
     previous_search_ranges: Option<Arc<[Range<Anchor>]>>,
@@ -1395,6 +1399,7 @@ pub struct EditorSnapshot {
     show_line_numbers: Option<bool>,
     number_deleted_lines: bool,
     show_git_diff_gutter: Option<bool>,
+    show_diff_decorations: bool,
     show_code_actions: Option<bool>,
     show_runnables: Option<bool>,
     show_breakpoints: Option<bool>,
@@ -2529,6 +2534,8 @@ impl Editor {
             stored_review_comments: Vec::new(),
             next_review_comment_id: 0,
             hovered_diff_hunk_row: None,
+            always_show_diff_hunk_controls: false,
+            show_diff_decorations: true,
             _subscriptions: (!is_minimap)
                 .then(|| {
                     vec![
@@ -3176,6 +3183,15 @@ impl Editor {
         })
     }
 
+    pub fn open_local_history(
+        workspace: &mut Workspace,
+        _: &OpenLocalHistory,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) {
+        local_history::open_local_history(workspace, window, cx);
+    }
+
     fn new_file_vertical(
         workspace: &mut Workspace,
         _: &workspace::NewFileSplitVertical,
@@ -3306,6 +3322,7 @@ impl Editor {
             show_line_numbers: self.show_line_numbers,
             number_deleted_lines: self.number_deleted_lines,
             show_git_diff_gutter: self.show_git_diff_gutter,
+            show_diff_decorations: self.show_diff_decorations,
             semantic_tokens_enabled: self.semantic_token_state.enabled(),
             show_code_actions: self.show_code_actions,
             show_runnables: self.show_runnables,
@@ -11803,14 +11820,47 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) {
+        let hunks = self.snapshot(window, cx).hunks_for_ranges(ranges);
+        self.restore_hunks(hunks, window, cx);
+    }
+
+    pub(crate) fn restore_diff_hunk_by_range(
+        &mut self,
+        hunk_range: Range<Anchor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.snapshot(window, cx);
+        let hunk = snapshot
+            .buffer_snapshot()
+            .diff_hunks()
+            .find(|candidate| candidate.multi_buffer_range == hunk_range);
+
+        if let Some(hunk) = hunk {
+            self.restore_hunks(vec![hunk], window, cx);
+        } else {
+            let point = hunk_range.start.to_point(&snapshot.buffer_snapshot());
+            self.restore_hunks_in_ranges(vec![point..point], window, cx);
+        }
+    }
+
+    fn restore_hunks(
+        &mut self,
+        hunks: Vec<MultiBufferDiffHunk>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.delegate_stage_and_restore {
-            let hunks = self.snapshot(window, cx).hunks_for_ranges(ranges);
             if !hunks.is_empty() {
                 cx.emit(EditorEvent::RestoreRequested { hunks });
             }
             return;
         }
-        let hunks = self.snapshot(window, cx).hunks_for_ranges(ranges);
+
+        if hunks.is_empty() {
+            return;
+        }
+
         self.transact(window, cx, |editor, window, cx| {
             editor.restore_diff_hunks(hunks, cx);
             let selections = editor
@@ -20901,6 +20951,15 @@ impl Editor {
         cx.notify();
     }
 
+    pub fn set_always_show_diff_hunk_controls(
+        &mut self,
+        always_show_diff_hunk_controls: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.always_show_diff_hunk_controls = always_show_diff_hunk_controls;
+        cx.notify();
+    }
+
     pub fn stage_and_next(
         &mut self,
         _: &::git::StageAndNext,
@@ -21702,6 +21761,15 @@ impl Editor {
 
     pub fn set_show_git_diff_gutter(&mut self, show_git_diff_gutter: bool, cx: &mut Context<Self>) {
         self.show_git_diff_gutter = Some(show_git_diff_gutter);
+        cx.notify();
+    }
+
+    pub fn set_show_diff_decorations(
+        &mut self,
+        show_diff_decorations: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_diff_decorations = show_diff_decorations;
         cx.notify();
     }
 
@@ -29445,11 +29513,10 @@ fn render_diff_hunk_controls(
                 })
                 .on_click({
                     let editor = editor.clone();
+                    let hunk_range = hunk_range.clone();
                     move |_event, window, cx| {
                         editor.update(cx, |editor, cx| {
-                            let snapshot = editor.snapshot(window, cx);
-                            let point = hunk_range.start.to_point(&snapshot.buffer_snapshot());
-                            editor.restore_hunks_in_ranges(vec![point..point], window, cx);
+                            editor.restore_diff_hunk_by_range(hunk_range.clone(), window, cx);
                         });
                     }
                 })

@@ -126,6 +126,13 @@ impl Domain for EditorDb {
     //   start_fingerprint: Option<String>,
     //   end_fingerprint: Option<String>,
     // )
+    //
+    // local_history_entries(
+    //   entry_id: i64,
+    //   abs_path: String,
+    //   saved_at_unix_ms: i64,
+    //   contents: String,
+    // )
 
     const MIGRATIONS: &[&str] = &[
         sql! (
@@ -223,6 +230,17 @@ impl Domain for EditorDb {
                 PRIMARY KEY(workspace_id, path, start)
             );
         ),
+        sql! (
+            CREATE TABLE local_history_entries (
+                entry_id INTEGER PRIMARY KEY,
+                abs_path TEXT NOT NULL,
+                saved_at_unix_ms INTEGER NOT NULL,
+                contents TEXT NOT NULL
+            ) STRICT;
+
+            CREATE INDEX local_history_entries_path_saved_at_idx
+                ON local_history_entries(abs_path, saved_at_unix_ms DESC, entry_id DESC);
+        ),
     ];
 }
 
@@ -319,6 +337,27 @@ impl EditorDb {
         }
     }
 
+    query! {
+        pub fn get_local_history_entries(
+            abs_path: &str,
+            limit: i64
+        ) -> Result<Vec<(i64, i64)>> {
+            SELECT entry_id, saved_at_unix_ms
+            FROM local_history_entries
+            WHERE abs_path = ?1
+            ORDER BY saved_at_unix_ms DESC, entry_id DESC
+            LIMIT ?2
+        }
+    }
+
+    query! {
+        pub fn get_local_history_entry_contents(entry_id: i64) -> Result<Option<String>> {
+            SELECT contents
+            FROM local_history_entries
+            WHERE entry_id = ?1
+        }
+    }
+
     pub async fn save_editor_selections(
         &self,
         editor_id: ItemId,
@@ -405,6 +444,48 @@ VALUES {placeholders};
             conn.exec_bound(sql!(
                 DELETE FROM file_folds WHERE workspace_id = ?1 AND path = ?2;
             ))?((workspace_id, path.as_ref()))
+        })
+        .await
+    }
+
+    pub async fn save_local_history_entry(
+        &self,
+        abs_path: String,
+        saved_at_unix_ms: i64,
+        contents: String,
+        keep_entries: i64,
+    ) -> Result<()> {
+        let abs_path_for_insert = abs_path.clone();
+        self.write(move |conn| {
+            conn.exec_bound(sql!(
+                INSERT INTO local_history_entries (abs_path, saved_at_unix_ms, contents)
+                VALUES (?1, ?2, ?3);
+            ))?((abs_path_for_insert.as_str(), saved_at_unix_ms, contents))?;
+
+            Ok::<(), anyhow::Error>(())
+        })
+        .await?;
+
+        let entry_ids_to_delete = self
+            .get_local_history_entries(&abs_path, i64::MAX)?
+            .into_iter()
+            .skip(keep_entries as usize)
+            .map(|(entry_id, _)| entry_id)
+            .collect::<Vec<_>>();
+
+        if entry_ids_to_delete.is_empty() {
+            return Ok(());
+        }
+
+        self.write(move |conn| {
+            for entry_id in entry_ids_to_delete {
+                conn.exec_bound(sql!(
+                    DELETE FROM local_history_entries
+                    WHERE entry_id = ?1;
+                ))?(entry_id)?;
+            }
+
+            Ok::<(), anyhow::Error>(())
         })
         .await
     }
@@ -613,5 +694,74 @@ mod tests {
         assert_eq!(retrieved_b.len(), 1);
         assert_eq!(retrieved_a[0].0, 10); // file_a's fold
         assert_eq!(retrieved_b[0].0, 30); // file_b's fold
+    }
+
+    #[gpui::test]
+    async fn test_save_and_get_local_history_entries(cx: &mut gpui::TestAppContext) {
+        let editor_db = cx.update(|cx| EditorDb::global(cx));
+        let file_path = "/tmp/test_local_history.rs".to_string();
+
+        editor_db
+            .save_local_history_entry(file_path.clone(), 1_000, "first".to_string(), 10)
+            .await
+            .unwrap();
+        editor_db
+            .save_local_history_entry(file_path.clone(), 2_000, "second".to_string(), 10)
+            .await
+            .unwrap();
+        editor_db
+            .save_local_history_entry(file_path.clone(), 3_000, "third".to_string(), 10)
+            .await
+            .unwrap();
+
+        let entries = editor_db.get_local_history_entries(&file_path, 10).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].1, 3_000);
+        assert_eq!(entries[1].1, 2_000);
+        assert_eq!(entries[2].1, 1_000);
+
+        let latest_contents = editor_db
+            .get_local_history_entry_contents(entries[0].0)
+            .unwrap()
+            .unwrap();
+        let oldest_contents = editor_db
+            .get_local_history_entry_contents(entries[2].0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest_contents, "third");
+        assert_eq!(oldest_contents, "first");
+
+        let limited_file_path = "/tmp/test_local_history_limit.rs".to_string();
+
+        editor_db
+            .save_local_history_entry(limited_file_path.clone(), 1_000, "first".to_string(), 2)
+            .await
+            .unwrap();
+        editor_db
+            .save_local_history_entry(limited_file_path.clone(), 2_000, "second".to_string(), 2)
+            .await
+            .unwrap();
+        editor_db
+            .save_local_history_entry(limited_file_path.clone(), 3_000, "third".to_string(), 2)
+            .await
+            .unwrap();
+
+        let entries = editor_db
+            .get_local_history_entries(&limited_file_path, 10)
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].1, 3_000);
+        assert_eq!(entries[1].1, 2_000);
+
+        let newest_contents = editor_db
+            .get_local_history_entry_contents(entries[0].0)
+            .unwrap()
+            .unwrap();
+        let older_contents = editor_db
+            .get_local_history_entry_contents(entries[1].0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(newest_contents, "third");
+        assert_eq!(older_contents, "second");
     }
 }

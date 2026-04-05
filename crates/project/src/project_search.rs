@@ -31,12 +31,28 @@ use crate::{
     worktree_store::WorktreeStore,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchResultLimits {
+    pub max_result_files: usize,
+    pub max_result_ranges: usize,
+}
+
+impl SearchResultLimits {
+    pub const DEFAULT: Self = Self {
+        max_result_files: 5_000,
+        max_result_ranges: 10_000,
+    };
+}
+
 pub struct Search {
     buffer_store: Entity<BufferStore>,
     worktree_store: Entity<WorktreeStore>,
-    limit: usize,
+    candidate_limit: usize,
+    result_limits: SearchResultLimits,
     kind: SearchKind,
 }
+
+const SCRATCH_WORKTREE_ROOT_NAME: &str = "scratch";
 
 /// Represents search setup, before it is actually kicked off with Search::into_results
 enum SearchKind {
@@ -53,6 +69,10 @@ enum SearchKind {
     },
     /// Run search against a known set of candidates. Even when working with a remote host, this won't round-trip to host.
     OpenBuffersOnly,
+}
+
+fn is_scratch_worktree(worktree: &Worktree) -> bool {
+    worktree.root_name().as_unix_str() == SCRATCH_WORKTREE_ROOT_NAME
 }
 
 /// Represents results of project search and allows one to either obtain match positions OR
@@ -109,22 +129,27 @@ impl Search {
         fs: Arc<dyn Fs>,
         buffer_store: Entity<BufferStore>,
         worktree_store: Entity<WorktreeStore>,
-        limit: usize,
+        result_limits: SearchResultLimits,
         cx: &mut App,
     ) -> Self {
-        let worktrees = worktree_store.read(cx).visible_worktrees(cx).collect();
+        let worktrees = worktree_store
+            .read(cx)
+            .visible_worktrees(cx)
+            .filter(|worktree| !is_scratch_worktree(&worktree.read(cx)))
+            .collect();
         Self {
             kind: SearchKind::Local { fs, worktrees },
             buffer_store,
             worktree_store,
-            limit,
+            candidate_limit: result_limits.max_result_files.saturating_add(1),
+            result_limits,
         }
     }
 
     pub(crate) fn remote(
         buffer_store: Entity<BufferStore>,
         worktree_store: Entity<WorktreeStore>,
-        limit: usize,
+        result_limits: SearchResultLimits,
         client_state: (AnyProtoClient, u64, Arc<Mutex<RemotelyCreatedModels>>),
     ) -> Self {
         Self {
@@ -135,24 +160,23 @@ impl Search {
             },
             buffer_store,
             worktree_store,
-            limit,
+            candidate_limit: result_limits.max_result_files.saturating_add(1),
+            result_limits,
         }
     }
     pub(crate) fn open_buffers_only(
         buffer_store: Entity<BufferStore>,
         worktree_store: Entity<WorktreeStore>,
-        limit: usize,
+        result_limits: SearchResultLimits,
     ) -> Self {
         Self {
             kind: SearchKind::OpenBuffersOnly,
             buffer_store,
             worktree_store,
-            limit,
+            candidate_limit: result_limits.max_result_files.saturating_add(1),
+            result_limits,
         }
     }
-
-    pub(crate) const MAX_SEARCH_RESULT_FILES: usize = 5_000;
-    pub(crate) const MAX_SEARCH_RESULT_RANGES: usize = 10_000;
     /// Prepares a project search run. The resulting [`SearchResultsHandle`] has to be used to specify whether you're interested in matching buffers
     /// or full search results.
     pub fn into_handle(mut self, query: SearchQuery, cx: &mut App) -> SearchResultsHandle {
@@ -160,6 +184,7 @@ impl Search {
         let mut unnamed_buffers = Vec::new();
         const MAX_CONCURRENT_BUFFER_OPENS: usize = 64;
         let buffers = self.buffer_store.read(cx);
+        let worktree_store = self.worktree_store.read(cx);
         for handle in buffers.buffers() {
             let buffer = handle.read(cx);
             if !buffers.is_searchable(&buffer.remote_id()) {
@@ -171,8 +196,14 @@ impl Search {
                 continue;
             } else if let Some(entry_id) = buffer.entry_id(cx) {
                 open_buffers.insert(entry_id);
-            } else {
-                self.limit = self.limit.saturating_sub(1);
+            } else if buffer.file().is_some_and(|file| {
+                let Some(worktree) = worktree_store.worktree_for_id(file.worktree_id(cx), cx)
+                else {
+                    return false;
+                };
+                !is_scratch_worktree(&worktree.read(cx))
+            }) {
+                self.candidate_limit = self.candidate_limit.saturating_sub(1);
                 unnamed_buffers.push(handle)
             };
         }
@@ -233,7 +264,7 @@ impl Search {
                             cx.background_spawn(Self::maintain_sorted_search_results(
                                 sorted_search_results_rx,
                                 get_buffer_for_full_scan_tx,
-                                self.limit,
+                                self.candidate_limit,
                             ))
                             .boxed_local(),
                         ];
@@ -268,7 +299,7 @@ impl Search {
                         let request = client.request(proto::FindSearchCandidates {
                             project_id: remote_id,
                             query: Some(query.to_proto()),
-                            limit: self.limit as _,
+                            limit: self.candidate_limit as _,
                             handle,
                         });
 
@@ -381,8 +412,12 @@ impl Search {
                 };
                 let ensure_matches_are_reported_in_order = if should_find_all_matches {
                     Some(
-                        Self::ensure_matched_ranges_are_reported_in_order(sorted_matches_rx, tx)
-                            .boxed_local(),
+                        Self::ensure_matched_ranges_are_reported_in_order(
+                            sorted_matches_rx,
+                            tx,
+                            self.result_limits,
+                        )
+                        .boxed_local(),
                     )
                 } else {
                     drop(tx);
@@ -556,6 +591,7 @@ impl Search {
     async fn ensure_matched_ranges_are_reported_in_order(
         rx: Receiver<oneshot::Receiver<(Entity<Buffer>, Vec<Range<language::Anchor>>)>>,
         tx: Sender<SearchResult>,
+        result_limits: SearchResultLimits,
     ) {
         use postage::stream::Stream;
         _ = maybe!(async move {
@@ -566,16 +602,30 @@ impl Search {
                     continue;
                 };
 
-                if matched_buffers > Search::MAX_SEARCH_RESULT_FILES
-                    || matches > Search::MAX_SEARCH_RESULT_RANGES
+                if matched_buffers >= result_limits.max_result_files
+                    || matches >= result_limits.max_result_ranges
                 {
                     _ = tx.send(SearchResult::LimitReached).await;
                     break;
                 }
+                let remaining_match_capacity = result_limits.max_result_ranges - matches;
+                let truncated = ranges.len() > remaining_match_capacity;
+                let ranges = if truncated {
+                    ranges
+                        .into_iter()
+                        .take(remaining_match_capacity)
+                        .collect::<Vec<_>>()
+                } else {
+                    ranges
+                };
                 matched_buffers += 1;
                 matches += ranges.len();
 
                 _ = tx.send(SearchResult::Buffer { buffer, ranges }).await?;
+                if truncated {
+                    _ = tx.send(SearchResult::LimitReached).await;
+                    break;
+                }
             }
             anyhow::Ok(())
         })
@@ -591,6 +641,13 @@ impl Search {
             .filter(|buffer| {
                 let b = buffer.read(cx);
                 if let Some(file) = b.file() {
+                    let Some(worktree) = worktree_store.worktree_for_id(file.worktree_id(cx), cx)
+                    else {
+                        return false;
+                    };
+                    if is_scratch_worktree(&worktree.read(cx)) {
+                        return false;
+                    }
                     if file.disk_state().is_deleted() {
                         return false;
                     }
@@ -605,6 +662,8 @@ impl Search {
                     {
                         return false;
                     }
+                } else {
+                    return false;
                 }
                 true
             })

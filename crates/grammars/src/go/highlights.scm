@@ -1,13 +1,34 @@
 (identifier) @variable
 
-(type_identifier) @type
+(type_identifier) @type.go_struct
 
 (type_spec
-  name: (type_identifier) @type.definition)
+  name: (type_identifier) @variable)
 
 (field_identifier) @property
 
-(package_identifier) @namespace
+(package_identifier) @variable
+
+(package_clause
+  (package_identifier) @package)
+
+(qualified_type
+  package: (package_identifier) @attribute
+  name: (type_identifier) @type.go_struct)
+
+((type_identifier) @type.builtin
+  (#match? @type.builtin "^(any|bool|byte|comparable|complex64|complex128|error|float32|float64|int|int8|int16|int32|int64|rune|string|uint|uint8|uint16|uint32|uint64|uintptr)$"))
+
+(parameter_declaration
+  name: (identifier) @variable)
+
+(variadic_parameter_declaration
+  name: (identifier) @variable)
+
+(method_declaration
+  receiver: (parameter_list
+    (parameter_declaration
+      name: (identifier) @variable.receiver)))
 
 (label_name) @label
 
@@ -16,12 +37,28 @@
   (literal_element
     (identifier) @property))
 
+(selector_expression
+  operand: (identifier) @variable)
+
 (call_expression
   function: (identifier) @function.call)
 
 (call_expression
   function: (selector_expression
     field: (field_identifier) @function.method.call))
+
+(call_expression
+  function: (selector_expression
+    operand: (identifier) @attribute
+    field: (field_identifier) @function.go_call))
+
+((call_expression
+  function: (identifier) @function.builtin)
+  (#eq? @function.builtin "make"))
+
+((call_expression
+  function: (identifier) @keyword)
+  (#eq? @keyword "append"))
 
 (function_declaration
   name: (identifier) @function)

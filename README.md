@@ -5,6 +5,12 @@
 
 Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
 
+This fork currently differs from upstream Zed in a few JetBrains IDEA-inspired ways:
+
+- Scratch files similar to JetBrains IDEA
+- Project search behavior closer to IDEA
+- Local history for file changes
+
 ---
 
 ### Installation

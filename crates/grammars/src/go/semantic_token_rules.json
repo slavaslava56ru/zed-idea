@@ -1,12 +1,97 @@
 [
   {
+    "token_type": "type",
+    "token_modifiers": ["definition", "struct"],
+    "style": ["variable"]
+  },
+  {
+    "token_type": "type",
+    "token_modifiers": ["struct"],
+    "style": ["type.go_struct", "type.struct", "type"]
+  },
+  {
+    "token_type": "function",
+    "token_modifiers": ["signature"],
+    "style": ["function.go_call", "function.call", "function"]
+  },
+  {
+    "token_type": "function",
+    "token_modifiers": [],
+    "style": ["function.method.call", "function.method", "function"]
+  },
+  {
+    "token_type": "variable",
+    "token_modifiers": ["struct"],
+    "style": ["variable.receiver", "variable"]
+  },
+  {
+    "token_type": "parameter",
+    "token_modifiers": ["declaration"],
+    "style": ["variable"]
+  },
+  {
+    "token_type": "parameter",
+    "token_modifiers": ["definition"],
+    "style": ["variable"]
+  },
+  {
+    "token_type": "parameter",
+    "token_modifiers": [],
+    "style": ["variable"]
+  },
+  {
+    "token_type": "namespace",
+    "token_modifiers": [],
+    "style": ["package", "module", "namespace", "attribute"]
+  },
+  {
+    "token_type": "type",
+    "token_modifiers": ["defaultLibrary"],
+    "style": ["type.builtin", "type"]
+  },
+  {
+    "token_type": "type",
+    "token_modifiers": ["interface"],
+    "style": ["type.go_struct", "type.struct", "type"]
+  },
+  {
+    "token_type": "type",
+    "token_modifiers": [],
+    "style": ["variable"]
+  },
+  {
+    "token_type": "struct",
+    "token_modifiers": [],
+    "style": ["variable"]
+  },
+  {
+    "token_type": "interface",
+    "token_modifiers": [],
+    "style": ["variable"]
+  },
+  {
+    "token_type": "method",
+    "token_modifiers": ["defaultLibrary"],
+    "style": ["function"]
+  },
+  {
+    "token_type": "variable",
+    "token_modifiers": ["readonly", "number"],
+    "style": ["constant"]
+  },
+  {
+    "token_type": "variable",
+    "token_modifiers": ["readonly", "defaultLibrary"],
+    "style": ["constant.builtin"]
+  },
+  {
     "token_type": "variable",
     "token_modifiers": ["readonly"],
-    "style": ["constant"]
+    "style": ["variable"]
   },
   {
     "token_type": "string",
     "token_modifiers": ["format"],
-    "style": ["string.special"]
+    "style": ["string.escape", "string.special"]
   }
 ]

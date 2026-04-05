@@ -1,8 +1,8 @@
 use crate::{
     Copy, CopyAndTrim, CopyPermalinkToLine, Cut, DisplayPoint, DisplaySnapshot, Editor,
     EvaluateSelectedText, FindAllReferences, GoToDeclaration, GoToDefinition, GoToImplementation,
-    GoToTypeDefinition, Paste, Rename, RevealInFileManager, RunToCursor, SelectMode,
-    SelectionEffects, SelectionExt, ToDisplayPoint, ToggleCodeActions,
+    GoToTypeDefinition, OpenLocalHistory, Paste, Rename, RevealInFileManager, RunToCursor,
+    SelectMode, SelectionEffects, SelectionExt, ToDisplayPoint, ToggleCodeActions,
     actions::{Format, FormatSelections},
     selections_collection::SelectionsCollection,
 };
@@ -200,6 +200,12 @@ pub fn deploy_context_menu(
 
         let focus = window.focused(cx);
         let has_reveal_target = editor.target_file(cx).is_some();
+        let has_local_history_target = editor
+            .buffer()
+            .read(cx)
+            .as_singleton()
+            .and_then(|buffer| buffer.read(cx).file())
+            .is_some_and(|file| !file.is_private());
         let has_selections = editor
             .selections
             .all::<PointUtf16>(&display_map)
@@ -305,6 +311,11 @@ pub fn deploy_context_menu(
                     !has_git_repo,
                     "Copy Permalink",
                     Box::new(CopyPermalinkToLine),
+                )
+                .action_disabled_when(
+                    !has_local_history_target,
+                    "Open Local History",
+                    Box::new(OpenLocalHistory),
                 )
                 .action_disabled_when(
                     !has_git_repo,

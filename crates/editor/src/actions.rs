@@ -478,6 +478,8 @@ actions!(
         DeleteToEndOfLine,
         /// Diffs the text stored in the clipboard against the current selection.
         DiffClipboardWithSelection,
+        /// Opens the local history panel for the current file.
+        OpenLocalHistory,
         /// Displays names of all active cursors.
         DisplayCursorNames,
         /// Duplicates the current line below.

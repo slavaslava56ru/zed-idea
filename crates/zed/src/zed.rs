@@ -3,6 +3,7 @@ pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_only_instance;
 mod migrate;
+mod new_scratch_file;
 mod open_listener;
 mod open_url_modal;
 mod quick_action_bar;
@@ -122,6 +123,8 @@ actions!(
         OpenTasks,
         /// Opens debug tasks configuration.
         OpenDebugTasks,
+        /// Creates a new scratch file outside the current project.
+        NewScratchFile,
         /// Shows the default semantic token rules (read-only).
         ShowDefaultSemanticTokenRules,
         /// Resets the application database.
@@ -1146,6 +1149,11 @@ fn register_actions(
                     },
                 )
                 .detach_and_log_err(cx);
+            }
+        })
+        .register_action({
+            move |workspace, _: &NewScratchFile, window, cx| {
+                new_scratch_file::toggle(workspace, window, cx);
             }
         });
 

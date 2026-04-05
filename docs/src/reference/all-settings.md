@@ -332,7 +332,7 @@ Note that a save will be triggered when an unsaved tab is closed, even if this i
 
 - Description: The name of a font to use for rendering text in the editor.
 - Setting: `buffer_font_family`
-- Default: `.ZedMono`. This currently aliases to [Lilex](https://lilex.myrt.co).
+- Default: `JetBrains Mono`
 
 **Options**
 
@@ -342,7 +342,15 @@ The name of any font family installed on the user's system, or `".ZedMono"`.
 
 - Description: The OpenType features to enable for text in the editor.
 - Setting: `buffer_font_features`
-- Default: `null`
+- Default:
+
+```json [settings]
+{
+  "buffer_font_features": {
+    "calt": false
+  }
+}
+```
 - Platform: macOS and Windows.
 
 **Options**
@@ -373,7 +381,7 @@ You can also set other OpenType features, like setting `cv01` to `7`:
 
 - Description: Set the buffer text's font fallbacks, this will be merged with the platform's default fallbacks.
 - Setting: `buffer_font_fallbacks`
-- Default: `null`
+- Default: `[".ZedMono"]`
 - Platform: macOS and Windows.
 
 **Options**
@@ -390,7 +398,7 @@ For example, to use `Nerd Font` as a fallback, add the following to your setting
 
 - Description: The default font size for text in the editor.
 - Setting: `buffer_font_size`
-- Default: `15`
+- Default: `13`
 
 **Options**
 
@@ -410,7 +418,7 @@ A font size from `6` to `100` pixels (inclusive)
 
 - Description: The default line height for text in the editor.
 - Setting: `buffer_line_height`
-- Default: `"comfortable"`
+- Default: `"standard"`
 
 **Options**
 
@@ -3057,7 +3065,7 @@ Examples:
   "preview_tabs": {
     "enabled": true,
     "enable_preview_from_project_panel": true,
-    "enable_preview_from_file_finder": false,
+    "enable_preview_from_file_finder": true,
     "enable_preview_from_multibuffer": true,
     "enable_preview_multibuffer_from_code_navigation": false,
     "enable_preview_file_from_code_navigation": true,
@@ -3080,7 +3088,7 @@ Examples:
 
 - Description: Determines whether to open files in preview mode when selected from the file finder.
 - Setting: `enable_preview_from_file_finder`
-- Default: `false`
+- Default: `true`
 
 **Options**
 
@@ -4538,7 +4546,7 @@ Example command to set the title: `echo -e "\e]2;New Title\007";`
 
 - Description: The theme setting can be specified in two forms - either as the name of a theme or as an object containing the `mode`, `dark`, and `light` themes for the Zed UI.
 - Setting: `theme`
-- Default: `One Dark`
+- Default: `JetBrains Dark Built-in`
 
 ### Theme Object
 
@@ -4550,7 +4558,7 @@ Example command to set the title: `echo -e "\e]2;New Title\007";`
 {
   "theme": {
     "mode": "system",
-    "dark": "One Dark",
+    "dark": "JetBrains Dark Built-in",
     "light": "One Light"
   }
 }
@@ -4570,7 +4578,7 @@ Example command to set the title: `echo -e "\e]2;New Title\007";`
 {
   "theme": {
     "mode": "dark",
-    "dark": "One Dark",
+    "dark": "JetBrains Dark Built-in",
     "light": "One Light"
   }
 }
@@ -4582,7 +4590,7 @@ Example command to set the title: `echo -e "\e]2;New Title\007";`
 {
   "theme": {
     "mode": "light",
-    "dark": "One Dark",
+    "dark": "JetBrains Dark Built-in",
     "light": "One Light"
   }
 }
@@ -4594,7 +4602,7 @@ Example command to set the title: `echo -e "\e]2;New Title\007";`
 {
   "theme": {
     "mode": "system",
-    "dark": "One Dark",
+    "dark": "JetBrains Dark Built-in",
     "light": "One Light"
   }
 }
@@ -4604,7 +4612,7 @@ Example command to set the title: `echo -e "\e]2;New Title\007";`
 
 - Description: The name of the dark Zed theme to use for the UI.
 - Setting: `dark`
-- Default: `One Dark`
+- Default: `JetBrains Dark Built-in`
 
 **Options**
 
@@ -5262,7 +5270,7 @@ Float values between `0.0` and `0.9`, where:
 
 - Description: The name of the font to use for text in the UI.
 - Setting: `ui_font_family`
-- Default: `.ZedSans`. This currently aliases to [IBM Plex](https://www.ibm.com/plex/).
+- Default: `.SystemUIFont`
 
 **Options**
 
@@ -5329,7 +5337,7 @@ For example, to use `Nerd Font` as a fallback, add the following to your setting
 
 - Description: The default font size for text in the UI.
 - Setting: `ui_font_size`
-- Default: `16`
+- Default: `13`
 
 **Options**
 

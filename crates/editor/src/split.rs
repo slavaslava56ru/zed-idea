@@ -397,6 +397,7 @@ pub struct SplittableEditor {
     rhs_multibuffer: Entity<MultiBuffer>,
     rhs_editor: Entity<Editor>,
     lhs: Option<LhsEditor>,
+    lhs_show_headers: bool,
     workspace: WeakEntity<Workspace>,
     split_state: Entity<SplitEditorState>,
     searched_side: Option<SplitSide>,
@@ -428,6 +429,10 @@ impl SplittableEditor {
 
     pub fn diff_view_style(&self) -> DiffViewStyle {
         self.diff_view_style
+    }
+
+    pub fn set_lhs_show_headers(&mut self, show_headers: bool) {
+        self.lhs_show_headers = show_headers;
     }
 
     pub fn is_split(&self) -> bool {
@@ -542,6 +547,7 @@ impl SplittableEditor {
             rhs_editor,
             rhs_multibuffer,
             lhs: None,
+            lhs_show_headers: true,
             workspace: workspace.downgrade(),
             split_state,
             searched_side: None,
@@ -560,8 +566,13 @@ impl SplittableEditor {
         };
         let project = workspace.read(cx).project().clone();
 
+        let lhs_show_headers = self.lhs_show_headers;
         let lhs_multibuffer = cx.new(|cx| {
-            let mut multibuffer = MultiBuffer::new(Capability::ReadOnly);
+            let mut multibuffer = if lhs_show_headers {
+                MultiBuffer::new(Capability::ReadOnly)
+            } else {
+                MultiBuffer::without_headers(Capability::ReadOnly)
+            };
             multibuffer.set_all_diff_hunks_expanded(cx);
             multibuffer
         });
@@ -3140,6 +3151,147 @@ mod tests {
             ddd
             eee"
             .unindent(),
+            &mut cx,
+        );
+    }
+
+    #[gpui::test]
+    async fn test_reverting_addition_hunk_from_lhs(cx: &mut gpui::TestAppContext) {
+        use rope::Point;
+        use unindent::Unindent as _;
+
+        let (editor, mut cx) = init_test(cx, SoftWrap::EditorWidth, DiffViewStyle::Split).await;
+
+        let base_text = "
+            aaa
+            bbb
+            ccc
+            ddd
+            eee
+        "
+        .unindent();
+        let current_text = "
+            aaa
+            bbb
+            xxx
+            yyy
+            ccc
+            ddd
+            eee
+        "
+        .unindent();
+
+        let (buffer, diff) = buffer_with_diff(&base_text, &current_text, &mut cx);
+
+        editor.update(cx, |editor, cx| {
+            let path = PathKey::for_buffer(&buffer, cx);
+            editor.update_excerpts_for_path(
+                path,
+                buffer.clone(),
+                vec![Point::new(0, 0)..buffer.read(cx).max_point()],
+                0,
+                diff.clone(),
+                cx,
+            );
+        });
+
+        cx.run_until_parked();
+
+        assert_split_content(
+            &editor,
+            "
+            § <no file>
+            § -----
+            aaa
+            bbb
+            xxx
+            yyy
+            ccc
+            ddd
+            eee"
+                .unindent(),
+            "
+            § <no file>
+            § -----
+            aaa
+            bbb
+            § spacer
+            § spacer
+            ccc
+            ddd
+            eee"
+                .unindent(),
+            &mut cx,
+        );
+
+        let lhs_editor = editor.update(cx, |editor, _cx| {
+            editor
+                .lhs_editor()
+                .expect("split diff should have lhs editor")
+                .clone()
+        });
+        cx.update_window_entity(&lhs_editor, |editor, window, cx| {
+            let snapshot = editor.snapshot(window, cx);
+            let hunk = snapshot
+                .buffer_snapshot()
+                .diff_hunks()
+                .next()
+                .expect("lhs should have an addition hunk to restore");
+            editor.restore_diff_hunk_by_range(hunk.multi_buffer_range.clone(), window, cx);
+        });
+
+        cx.run_until_parked();
+
+        assert_split_content(
+            &editor,
+            "
+            § <no file>
+            § -----
+            aaa
+            bbb
+            ccc
+            ddd
+            eee"
+                .unindent(),
+            "
+            § <no file>
+            § -----
+            aaa
+            bbb
+            ccc
+            ddd
+            eee"
+                .unindent(),
+            &mut cx,
+        );
+
+        let buffer_snapshot = buffer.read_with(cx, |buffer, _| buffer.text_snapshot());
+        diff.update(cx, |diff, cx| {
+            diff.recalculate_diff_sync(&buffer_snapshot, cx);
+        });
+
+        cx.run_until_parked();
+
+        assert_split_content(
+            &editor,
+            "
+            § <no file>
+            § -----
+            aaa
+            bbb
+            ccc
+            ddd
+            eee"
+                .unindent(),
+            "
+            § <no file>
+            § -----
+            aaa
+            bbb
+            ccc
+            ddd
+            eee"
+                .unindent(),
             &mut cx,
         );
     }

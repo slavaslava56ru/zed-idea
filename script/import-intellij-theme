@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+scheme_path="${1:-${INTELLIJ_SCHEME_PATH:-$HOME/Desktop/Dark.icls}}"
+theme_path="${2:-${ZED_THEME_PATH:-$repo_root/assets/themes/jetbrains/jetbrains.json}}"
+installed_theme_path="${3:-${ZED_INSTALLED_THEME_PATH:-$HOME/Library/Application Support/Zed/extensions/installed/jetbrains-themes/themes/jetbrains-dark.json}}"
+settings_path="${ZED_SETTINGS_PATH:-$HOME/.config/zed/settings.json}"
+sync_settings_overrides="${ZED_SYNC_THEME_OVERRIDES:-0}"
+
+if [[ ! -f "$scheme_path" ]]; then
+  echo "IntelliJ color scheme not found: $scheme_path" >&2
+  exit 1
+fi
+
+if [[ ! -f "$theme_path" ]]; then
+  echo "Zed theme file not found: $theme_path" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$installed_theme_path")"
+
+cd "$repo_root"
+
+theme_importer_args=(
+  --format intellij
+  "$scheme_path"
+  --base-theme "$theme_path"
+  --output "$theme_path"
+)
+
+if [[ "$sync_settings_overrides" == "1" ]]; then
+  if [[ ! -f "$settings_path" ]]; then
+    echo "Zed settings file not found: $settings_path" >&2
+    exit 1
+  fi
+
+  theme_importer_args+=(--settings "$settings_path")
+fi
+
+cargo run -p theme_importer -- "${theme_importer_args[@]}"
+
+cp "$theme_path" "$installed_theme_path"
+
+echo "Imported IntelliJ scheme from: $scheme_path"
+echo "Updated Zed theme: $theme_path"
+if [[ "$sync_settings_overrides" == "1" ]]; then
+  echo "Updated Zed settings: $settings_path"
+fi
+echo "Synced installed theme: $installed_theme_path"

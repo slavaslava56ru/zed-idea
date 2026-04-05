@@ -2000,7 +2000,10 @@ impl EditorElement {
                 let editor = self.editor.read(cx);
                 let is_singleton = editor.buffer_kind(cx) == ItemBufferKind::Singleton;
                 // Git
-                (is_singleton && scrollbar_settings.git_diff && snapshot.buffer_snapshot().has_diff_hunks())
+                (snapshot.show_diff_decorations
+                    && is_singleton
+                    && scrollbar_settings.git_diff
+                    && snapshot.buffer_snapshot().has_diff_hunks())
                 ||
                 // Buffer Search Results
                 (is_singleton && scrollbar_settings.search_results && editor.has_background_highlights(HighlightKey::BufferSearchHighlights))
@@ -2339,6 +2342,10 @@ impl EditorElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Vec<(DisplayDiffHunk, Option<Hitbox>)> {
+        if !self.editor.read(cx).show_diff_decorations {
+            return Vec::new();
+        }
+
         let folded_buffers = self.editor.read(cx).folded_buffers(cx);
         let mut display_hunks = snapshot
             .display_diff_hunks_for_rows(display_rows, folded_buffers)
@@ -5599,6 +5606,10 @@ impl EditorElement {
         highlighted_ranges: &mut Vec<(Range<DisplayPoint>, Hsla)>,
         cx: &mut App,
     ) {
+        if !snapshot.show_diff_decorations {
+            return;
+        }
+
         let colors = cx.theme().colors();
 
         let word_highlights = display_hunks
@@ -5657,8 +5668,13 @@ impl EditorElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (Vec<AnyElement>, Vec<(DisplayRow, Bounds<Pixels>)>) {
+        if !editor.read(cx).show_diff_decorations {
+            return (Vec::new(), Vec::new());
+        }
+
         let render_diff_hunk_controls = editor.read(cx).render_diff_hunk_controls.clone();
         let hovered_diff_hunk_row = editor.read(cx).hovered_diff_hunk_row;
+        let always_show_diff_hunk_controls = editor.read(cx).always_show_diff_hunk_controls;
         let sticky_top = text_hitbox.bounds.top() + sticky_header_height;
 
         let mut controls = vec![];
@@ -5708,9 +5724,10 @@ impl EditorElement {
                     continue;
                 }
 
-                if active_rows
-                    .iter()
-                    .any(|row| row.is_some_and(|row| display_row_range.contains(&row)))
+                if always_show_diff_hunk_controls
+                    || active_rows
+                        .iter()
+                        .any(|row| row.is_some_and(|row| display_row_range.contains(&row)))
                 {
                     let hunk_start_y: Pixels = (display_row_range.start.as_f64()
                         * ScrollPixelOffset::from(line_height)
@@ -7121,7 +7138,7 @@ impl EditorElement {
                         .background_spawn(async move {
                             let max_point = snapshot.display_snapshot.buffer_snapshot().max_point();
                             let mut marker_quads = Vec::new();
-                            if scrollbar_settings.git_diff {
+                            if snapshot.show_diff_decorations && scrollbar_settings.git_diff {
                                 let marker_row_ranges =
                                     snapshot.buffer_snapshot().diff_hunks().map(|hunk| {
                                         let start_display_row =
@@ -9890,59 +9907,65 @@ impl Element for EditorElement {
                         })
                         .unwrap_or_default();
 
-                    for (ix, row_info) in row_infos.iter().enumerate() {
-                        let Some(diff_status) = row_info.diff_status else {
-                            continue;
-                        };
-
-                        let background_color = match diff_status.kind {
-                            DiffHunkStatusKind::Added => cx.theme().colors().version_control_added,
-                            DiffHunkStatusKind::Deleted => {
-                                cx.theme().colors().version_control_deleted
-                            }
-                            DiffHunkStatusKind::Modified => {
-                                debug_panic!("modified diff status for row info");
+                    if snapshot.show_diff_decorations {
+                        for (ix, row_info) in row_infos.iter().enumerate() {
+                            let Some(diff_status) = row_info.diff_status else {
                                 continue;
-                            }
-                        };
+                            };
 
-                        let hunk_opacity = if is_light { 0.16 } else { 0.12 };
+                            let background_color = match diff_status.kind {
+                                DiffHunkStatusKind::Added => {
+                                    cx.theme().colors().version_control_added
+                                }
+                                DiffHunkStatusKind::Deleted => {
+                                    cx.theme().colors().version_control_deleted
+                                }
+                                DiffHunkStatusKind::Modified => {
+                                    debug_panic!("modified diff status for row info");
+                                    continue;
+                                }
+                            };
 
-                        let hollow_highlight = LineHighlight {
-                            background: (background_color.opacity(if is_light {
-                                0.08
+                            let hunk_opacity = if is_light { 0.16 } else { 0.12 };
+
+                            let hollow_highlight = LineHighlight {
+                                background: (background_color.opacity(if is_light {
+                                    0.08
+                                } else {
+                                    0.06
+                                }))
+                                .into(),
+                                border: Some(if is_light {
+                                    background_color.opacity(0.48)
+                                } else {
+                                    background_color.opacity(0.36)
+                                }),
+                                include_gutter: true,
+                                type_id: None,
+                            };
+
+                            let filled_highlight = LineHighlight {
+                                background: solid_background(
+                                    background_color.opacity(hunk_opacity),
+                                ),
+                                border: None,
+                                include_gutter: true,
+                                type_id: None,
+                            };
+
+                            let background = if Self::diff_hunk_hollow(diff_status, cx) {
+                                hollow_highlight
                             } else {
-                                0.06
-                            }))
-                            .into(),
-                            border: Some(if is_light {
-                                background_color.opacity(0.48)
-                            } else {
-                                background_color.opacity(0.36)
-                            }),
-                            include_gutter: true,
-                            type_id: None,
-                        };
+                                filled_highlight
+                            };
 
-                        let filled_highlight = LineHighlight {
-                            background: solid_background(background_color.opacity(hunk_opacity)),
-                            border: None,
-                            include_gutter: true,
-                            type_id: None,
-                        };
+                            let base_display_point =
+                                DisplayPoint::new(start_row + DisplayRow(ix as u32), 0);
 
-                        let background = if Self::diff_hunk_hollow(diff_status, cx) {
-                            hollow_highlight
-                        } else {
-                            filled_highlight
-                        };
-
-                        let base_display_point =
-                            DisplayPoint::new(start_row + DisplayRow(ix as u32), 0);
-
-                        highlighted_rows
-                            .entry(base_display_point.row())
-                            .or_insert(background);
+                            highlighted_rows
+                                .entry(base_display_point.row())
+                                .or_insert(background);
+                        }
                     }
 
                     // Add diff review drag selection highlight to text area

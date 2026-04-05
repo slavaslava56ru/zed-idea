@@ -50,7 +50,7 @@ pub use git_store::{
     linked_worktree_short_name, worktrees_directory_for_repo,
 };
 pub use manifest_tree::ManifestTree;
-pub use project_search::{Search, SearchResults};
+pub use project_search::{Search, SearchResultLimits, SearchResults};
 
 use anyhow::{Context as _, Result, anyhow};
 use buffer_store::{BufferStore, BufferStoreEvent};
@@ -4430,7 +4430,12 @@ impl Project {
         })
     }
 
-    fn search_impl(&mut self, query: SearchQuery, cx: &mut Context<Self>) -> SearchResultsHandle {
+    fn search_impl(
+        &mut self,
+        query: SearchQuery,
+        result_limits: SearchResultLimits,
+        cx: &mut Context<Self>,
+    ) -> SearchResultsHandle {
         let client: Option<(AnyProtoClient, _)> = if let Some(ssh_client) = &self.remote_client {
             Some((ssh_client.read(cx).proto_client(), 0))
         } else if let Some(remote_id) = self.remote_id() {
@@ -4444,21 +4449,21 @@ impl Project {
             project_search::Search::open_buffers_only(
                 self.buffer_store.clone(),
                 self.worktree_store.clone(),
-                project_search::Search::MAX_SEARCH_RESULT_FILES + 1,
+                result_limits,
             )
         } else {
             match client {
                 Some((client, remote_id)) => project_search::Search::remote(
                     self.buffer_store.clone(),
                     self.worktree_store.clone(),
-                    project_search::Search::MAX_SEARCH_RESULT_FILES + 1,
+                    result_limits,
                     (client, remote_id, self.remotely_created_models.clone()),
                 ),
                 None => project_search::Search::local(
                     self.fs.clone(),
                     self.buffer_store.clone(),
                     self.worktree_store.clone(),
-                    project_search::Search::MAX_SEARCH_RESULT_FILES + 1,
+                    result_limits,
                     cx,
                 ),
             }
@@ -4471,7 +4476,17 @@ impl Project {
         query: SearchQuery,
         cx: &mut Context<Self>,
     ) -> SearchResults<SearchResult> {
-        self.search_impl(query, cx).results(cx)
+        self.search_impl(query, SearchResultLimits::DEFAULT, cx)
+            .results(cx)
+    }
+
+    pub fn search_with_result_limits(
+        &mut self,
+        query: SearchQuery,
+        result_limits: SearchResultLimits,
+        cx: &mut Context<Self>,
+    ) -> SearchResults<SearchResult> {
+        self.search_impl(query, result_limits, cx).results(cx)
     }
 
     pub fn request_lsp<R: LspCommand>(
@@ -5402,7 +5417,8 @@ impl Project {
         let client = this.read_with(&cx, |this, _| this.client());
         let task = cx.spawn(async move |cx| {
             let results = this.update(cx, |this, cx| {
-                this.search_impl(query, cx).matching_buffers(cx)
+                this.search_impl(query, SearchResultLimits::DEFAULT, cx)
+                    .matching_buffers(cx)
             });
             let (batcher, batches) = project_search::AdaptiveBatcher::new(cx.background_executor());
             let mut new_matches = Box::pin(results.rx);

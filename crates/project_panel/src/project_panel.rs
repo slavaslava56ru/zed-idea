@@ -27,7 +27,7 @@ use gpui::{
     MouseButton, MouseDownEvent, ParentElement, PathPromptOptions, Pixels, Point, PromptLevel,
     Render, ScrollStrategy, Stateful, Styled, Subscription, Task, UniformListScrollHandle,
     WeakEntity, Window, actions, anchored, deferred, div, hsla, linear_color_stop, linear_gradient,
-    point, px, size, transparent_white, uniform_list,
+    point, px, rgb, size, transparent_white, uniform_list,
 };
 use language::DiagnosticSeverity;
 use menu::{Confirm, SelectFirst, SelectLast, SelectNext, SelectPrevious};
@@ -43,8 +43,7 @@ use rayon::slice::ParallelSliceMut;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::{
-    DockSide, ProjectPanelEntrySpacing, Settings, SettingsStore, ShowDiagnostics, ShowIndentGuides,
-    update_settings_file,
+    DockSide, Settings, SettingsStore, ShowDiagnostics, ShowIndentGuides, update_settings_file,
 };
 use smallvec::SmallVec;
 use std::ops::Neg;
@@ -89,6 +88,21 @@ use crate::{
 
 const PROJECT_PANEL_KEY: &str = "ProjectPanel";
 const NEW_ENTRY_ID: ProjectEntryId = ProjectEntryId::MAX;
+const SCRATCH_WORKTREE_ROOT_NAME: &str = "scratch";
+const SCRATCHES_AND_CONSOLES_LABEL: &str = "Scratches and Consoles";
+const PROJECT_PANEL_ENTRY_FONT_SIZE_PX: f32 = 16.;
+const PROJECT_PANEL_ENTRY_HEIGHT_PX: f32 = 21.;
+const PROJECT_PANEL_DISCLOSURE_WIDTH_PX: f32 = 16.;
+const PROJECT_PANEL_FOLDER_ICON_SIZE_PX: f32 = 18.;
+const PROJECT_PANEL_DISCLOSURE_SIZE_PX: f32 = 14.;
+
+fn project_panel_background() -> Hsla {
+    Hsla::from(rgb(0x191a1c))
+}
+
+fn is_scratch_worktree_snapshot(snapshot: &worktree::Snapshot) -> bool {
+    snapshot.root_name().as_unix_str() == SCRATCH_WORKTREE_ROOT_NAME
+}
 
 struct VisibleEntriesForWorktree {
     worktree_id: WorktreeId,
@@ -270,6 +284,7 @@ struct EntryDetails {
     path: Arc<RelPath>,
     depth: usize,
     kind: EntryKind,
+    is_root: bool,
     is_ignored: bool,
     is_expanded: bool,
     is_selected: bool,
@@ -626,13 +641,10 @@ struct ItemColors {
 
 fn get_item_color(is_sticky: bool, cx: &App) -> ItemColors {
     let colors = cx.theme().colors();
+    let background = project_panel_background();
 
     ItemColors {
-        default: if is_sticky {
-            colors.panel_overlay_background
-        } else {
-            colors.panel_background
-        },
+        default: background,
         hover: if is_sticky {
             colors.panel_overlay_hover
         } else {
@@ -896,6 +908,27 @@ impl ProjectPanel {
                 undo_manager: UndoManager::new(workspace.weak_handle()),
             };
             this.update_visible_entries(None, false, false, window, cx);
+
+            if project.read(cx).is_local() || project.read(cx).is_via_wsl_with_host_interop(cx) {
+                let project = project.clone();
+                let fs = workspace.app_state().fs.clone();
+                cx.spawn_in(window, async move |_, cx| {
+                    let scratch_root = project
+                        .update(cx, |project, cx| {
+                            project.try_windows_path_to_wsl(paths::data_dir().as_path(), cx)
+                        })
+                        .await?;
+                    let scratch_dir = scratch_root.join(SCRATCH_WORKTREE_ROOT_NAME);
+                    fs.create_dir(&scratch_dir).await?;
+                    project
+                        .update(cx, |project, cx| {
+                            project.find_or_create_worktree(&scratch_dir, true, cx)
+                        })
+                        .await?;
+                    anyhow::Ok(())
+                })
+                .detach_and_log_err(cx);
+            }
 
             this
         });
@@ -3934,10 +3967,18 @@ impl ProjectPanel {
             .map(|entry| entry.id);
         let mut max_width_item = None;
 
-        let visible_worktrees: Vec<_> = project
-            .visible_worktrees(cx)
-            .map(|worktree| worktree.read(cx).snapshot())
+        let mut visible_worktrees: Vec<_> = project
+            .worktrees(cx)
+            .filter_map(|worktree| {
+                let snapshot = worktree.read(cx).snapshot();
+                if worktree.read(cx).is_visible() || is_scratch_worktree_snapshot(&snapshot) {
+                    Some(snapshot)
+                } else {
+                    None
+                }
+            })
             .collect();
+        visible_worktrees.sort_by_key(|snapshot| is_scratch_worktree_snapshot(snapshot));
         let hide_root = settings.hide_root && visible_worktrees.len() == 1;
         let hide_hidden = settings.hide_hidden;
 
@@ -5232,6 +5273,7 @@ impl ProjectPanel {
         const GROUP_NAME: &str = "project_entry";
 
         let kind = details.kind;
+        let is_root = details.is_root;
         let is_sticky = details.sticky.is_some();
         let sticky_index = details.sticky.as_ref().map(|this| this.sticky_index);
         let settings = ProjectPanelSettings::get_global(cx);
@@ -5261,6 +5303,18 @@ impl ProjectPanel {
         let diagnostic_severity = details.diagnostic_severity;
         let diagnostic_count = details.diagnostic_count;
         let item_colors = get_item_color(is_sticky, cx);
+        let label_size = LabelSize::Custom(rems_from_px(PROJECT_PANEL_ENTRY_FONT_SIZE_PX));
+        let label_text_color = Color::Custom(hsla(0.0, 0.0, 1.0, 1.0));
+        let icon_size = if kind.is_dir() {
+            IconSize::Custom(rems_from_px(PROJECT_PANEL_FOLDER_ICON_SIZE_PX))
+        } else {
+            IconSize::Medium
+        };
+        let label_weight = if is_root {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        };
 
         let canonical_path = details
             .canonical_path
@@ -5695,12 +5749,10 @@ impl ProjectPanel {
             )
             .child(
                 ListItem::new(id)
+                    .height(px(PROJECT_PANEL_ENTRY_HEIGHT_PX))
                     .indent_level(depth)
                     .indent_step_size(px(settings.indent_size))
-                    .spacing(match settings.entry_spacing {
-                        ProjectPanelEntrySpacing::Comfortable => ListItemSpacing::Dense,
-                        ProjectPanelEntrySpacing::Standard => ListItemSpacing::ExtraDense,
-                    })
+                    .spacing(ListItemSpacing::ExtraDense)
                     .selectable(false)
                     .when(
                         canonical_path.is_some()
@@ -5767,6 +5819,48 @@ impl ProjectPanel {
                             )
                         },
                     )
+                    .start_slot(
+                        h_flex().child(
+                            h_flex()
+                                .w(rems_from_px(PROJECT_PANEL_DISCLOSURE_WIDTH_PX))
+                                .justify_center()
+                                .flex_none()
+                                .when(kind.is_dir(), |this| {
+                                    this.child(
+                                        div()
+                                            .cursor_pointer()
+                                            .on_mouse_down(MouseButton::Left, cx.listener(
+                                                move |project_panel,
+                                                      event: &MouseDownEvent,
+                                                      window,
+                                                      cx| {
+                                                    cx.stop_propagation();
+                                                    if event.modifiers.alt {
+                                                        project_panel
+                                                            .toggle_expand_all(
+                                                                entry_id, window, cx,
+                                                            );
+                                                    } else {
+                                                        project_panel
+                                                            .toggle_expanded(entry_id, window, cx);
+                                                    }
+                                                },
+                                            ))
+                                            .child(
+                                                Icon::new(if details.is_expanded {
+                                                    IconName::ChevronDown
+                                                } else {
+                                                    IconName::ChevronRight
+                                                })
+                                                .size(IconSize::Custom(rems_from_px(
+                                                    PROJECT_PANEL_DISCLOSURE_SIZE_PX,
+                                                )))
+                                                .color(Color::Muted),
+                                            ),
+                                    )
+                                }),
+                        ),
+                    )
                     .child(if let Some(icon) = &icon {
                         if let Some((_, decoration_color)) =
                             entry_diagnostic_aware_icon_decoration_and_color(diagnostic_severity)
@@ -5776,7 +5870,9 @@ impl ProjectPanel {
                                 .unwrap_or(false);
                             div().child(
                                 DecoratedIcon::new(
-                                    Icon::from_path(icon.clone()).color(Color::Muted),
+                                    Icon::from_path(icon.clone())
+                                        .color(Color::Muted)
+                                        .size(icon_size),
                                     Some(
                                         IconDecoration::new(
                                             if kind.is_file() {
@@ -5803,14 +5899,18 @@ impl ProjectPanel {
                                 .into_any_element(),
                             )
                         } else {
-                            h_flex().child(Icon::from_path(icon.to_string()).color(Color::Muted))
+                            h_flex().child(
+                                Icon::from_path(icon.to_string())
+                                    .color(Color::Muted)
+                                    .size(icon_size),
+                            )
                         }
                     } else if let Some((icon_name, color)) =
                         entry_diagnostic_aware_icon_name_and_color(diagnostic_severity)
                     {
                         h_flex()
                             .size(IconSize::default().rems())
-                            .child(Icon::new(icon_name).color(color).size(IconSize::Small))
+                            .child(Icon::new(icon_name).color(color).size(icon_size))
                     } else {
                         h_flex()
                             .size(IconSize::default().rems())
@@ -5818,11 +5918,13 @@ impl ProjectPanel {
                             .flex_none()
                     })
                     .child(if show_editor {
-                        h_flex().h_6().w_full().child(self.filename_editor.clone())
-                    } else {
                         h_flex()
-                            .h_6()
-                            .map(|this| match self.state.ancestors.get(&entry_id) {
+                            .h(px(PROJECT_PANEL_ENTRY_HEIGHT_PX))
+                            .w_full()
+                            .child(self.filename_editor.clone())
+                    } else {
+                        h_flex().h(px(PROJECT_PANEL_ENTRY_HEIGHT_PX)).map(|this| {
+                            match self.state.ancestors.get(&entry_id) {
                                 Some(folded_ancestors) => {
                                     this.children(self.render_folder_elements(
                                         folded_ancestors,
@@ -5836,22 +5938,21 @@ impl ProjectPanel {
                                         settings.bold_folder_labels,
                                         item_colors.drag_over,
                                         folded_directory_drag_target,
-                                        filename_text_color,
+                                        label_text_color,
                                         cx,
                                     ))
                                 }
 
                                 None => this.child(
                                     Label::new(file_name)
+                                        .size(label_size)
+                                        .weight(label_weight)
                                         .single_line()
-                                        .color(filename_text_color)
-                                        .when(
-                                            settings.bold_folder_labels && kind.is_dir(),
-                                            |this| this.weight(FontWeight::SEMIBOLD),
-                                        )
+                                        .color(label_text_color)
                                         .into_any_element(),
                                 ),
-                            })
+                            }
+                        })
                     })
                     .on_secondary_mouse_down(cx.listener(
                         move |this, event: &MouseDownEvent, window, cx| {
@@ -6011,11 +6112,16 @@ impl ProjectPanel {
                         )
                         .child(
                             Label::new(component)
+                                .size(LabelSize::Custom(rems_from_px(
+                                    PROJECT_PANEL_ENTRY_FONT_SIZE_PX,
+                                )))
                                 .single_line()
-                                .color(filename_text_color)
-                                .when(bold_folder_labels && !is_file, |this| {
-                                    this.weight(FontWeight::SEMIBOLD)
+                                .weight(if bold_folder_labels && !is_file {
+                                    FontWeight::NORMAL
+                                } else {
+                                    FontWeight::NORMAL
                                 })
+                                .color(filename_text_color)
                                 .when(index == active_index && is_active_or_marked, |this| {
                                     this.underline()
                                 }),
@@ -6099,6 +6205,10 @@ impl ProjectPanel {
             })
             .child(
                 Label::new(delimiter.clone())
+                    .size(LabelSize::Custom(rems_from_px(
+                        PROJECT_PANEL_ENTRY_FONT_SIZE_PX,
+                    )))
+                    .weight(FontWeight::NORMAL)
                     .single_line()
                     .color(filename_text_color),
             )
@@ -6128,6 +6238,7 @@ impl ProjectPanel {
             .unwrap_or(&[]);
         let is_expanded = expanded_entry_ids.binary_search(&entry.id).is_ok();
 
+        let is_root = entry.path.file_name().is_none();
         let icon = match entry.kind {
             EntryKind::File => {
                 if show_file_icons {
@@ -6140,7 +6251,7 @@ impl ProjectPanel {
                 if show_folder_icons {
                     FileIcons::get_folder_icon(is_expanded, entry.path.as_std_path(), cx)
                 } else {
-                    FileIcons::get_chevron_icon(is_expanded, cx)
+                    None
                 }
             }
         };
@@ -6149,7 +6260,9 @@ impl ProjectPanel {
         let (depth, difference) =
             ProjectPanel::calculate_depth_and_difference(entry, entries_paths);
 
-        let filename = if difference > 1 {
+        let filename = if is_root && root_name.as_unix_str() == SCRATCH_WORKTREE_ROOT_NAME {
+            SCRATCHES_AND_CONSOLES_LABEL.to_string()
+        } else if difference > 1 {
             entry
                 .path
                 .last_n_components(difference)
@@ -6195,6 +6308,7 @@ impl ProjectPanel {
             path: entry.path.clone(),
             depth,
             kind: entry.kind,
+            is_root,
             is_ignored: entry.is_ignored,
             is_expanded,
             is_selected,
@@ -6587,6 +6701,7 @@ impl Render for ProjectPanel {
             h_flex()
                 .id("project-panel")
                 .group("project-panel")
+                .bg(project_panel_background())
                 .when(panel_settings.drag_and_drop, |this| {
                     this.on_drag_move(cx.listener(handle_drag_move::<ExternalPaths>))
                         .on_drag_move(cx.listener(handle_drag_move::<DraggedSelection>))
@@ -6887,6 +7002,7 @@ impl Render for ProjectPanel {
                                 .id("project-panel-blank-area")
                                 .block_mouse_except_scroll()
                                 .flex_grow()
+                                .bg(project_panel_background())
                                 .on_scroll_wheel({
                                     let scroll_handle = self.scroll_handle.clone();
                                     let entity_id = cx.entity().entity_id();
@@ -7047,7 +7163,7 @@ impl Render for ProjectPanel {
                         if horizontal_scroll {
                             scrollbars = scrollbars.with_track_along(
                                 ScrollAxes::Horizontal,
-                                cx.theme().colors().panel_background,
+                                project_panel_background(),
                             );
                         }
                         scrollbars.notify_content()
