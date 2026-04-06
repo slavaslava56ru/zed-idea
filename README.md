@@ -7,7 +7,8 @@ Welcome to Zed, a high-performance, multiplayer code editor from the creators of
 
 This fork currently differs from upstream Zed in a few JetBrains IDEA-inspired ways:
 
-- Bundled JetBrains Dark theme and JetBrains New UI icon theme enabled by default
+- Bundled JetBrains Dark/Light theme based on the original [JetBrains Themes](https://github.com/artemevsevev/zed-theme-jetbrains) extension
+- Bundled JetBrains New UI icon theme based on the original [JetBrains New UI Icon Theme](https://github.com/ankddev/zed-jetbrains-newui-icons) extension
 - JetBrains-style default editor settings, semantic token colors, and line height
 - Scratch files similar to JetBrains IDEA
 - Scratch selector on `Cmd-Shift-N` with file-type picker
