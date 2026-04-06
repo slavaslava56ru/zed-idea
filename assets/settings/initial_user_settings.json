@@ -7,11 +7,75 @@
 // custom settings, run `zed: open default settings` from the
 // command palette (cmd-shift-p / ctrl-shift-p)
 {
-  "ui_font_size": 16,
-  "buffer_font_size": 15,
-  "theme": {
-    "mode": "system",
-    "light": "One Light",
-    "dark": "One Dark",
+  "base_keymap": "JetBrains",
+  "icon_theme": "JetBrains New UI Icons (Dark)",
+  "ui_font_family": ".SystemUIFont",
+  "ui_font_size": 13,
+  "buffer_font_size": 13,
+  "buffer_line_height": {
+    "custom": 1.7
   },
+  "current_line_highlight": "none",
+  "inline_code_actions": false,
+  "toolbar": {
+    "breadcrumbs": false
+  },
+  "gutter": {
+    "runnables": false,
+    "folds": false
+  },
+  "git": {
+    "inline_blame": {
+      "enabled": false
+    }
+  },
+  "theme": {
+    "mode": "dark",
+    "light": "JetBrains Dark",
+    "dark": "JetBrains Dark"
+  },
+  "global_lsp_settings": {
+    "semantic_token_rules": [
+      {
+        "token_type": "function",
+        "token_modifiers": ["definition", "signature"],
+        "foreground_color": "#56a8f5"
+      },
+      {
+        "token_type": "method",
+        "token_modifiers": ["definition", "signature"],
+        "foreground_color": "#56a8f5"
+      },
+      {
+        "token_type": "function",
+        "token_modifiers": ["defaultLibrary"]
+      },
+      {
+        "token_type": "function",
+        "token_modifiers": [],
+        "foreground_color": "#b09d79"
+      },
+      {
+        "token_type": "method",
+        "token_modifiers": [],
+        "foreground_color": "#b09d79"
+      },
+      {
+        "token_type": "variable",
+        "token_modifiers": ["readonly", "defaultLibrary"],
+        "foreground_color": "#cf8e6d",
+        "font_style": "normal"
+      },
+      {
+        "token_type": "variable",
+        "token_modifiers": ["readonly", "number"],
+        "style": ["constant"]
+      },
+      {
+        "token_type": "variable",
+        "token_modifiers": [],
+        "foreground_color": "#bcbec4"
+      }
+    ]
+  }
 }

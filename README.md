@@ -7,8 +7,12 @@ Welcome to Zed, a high-performance, multiplayer code editor from the creators of
 
 This fork currently differs from upstream Zed in a few JetBrains IDEA-inspired ways:
 
+- Bundled JetBrains Dark theme and JetBrains New UI icon theme enabled by default
+- JetBrains-style default editor settings, semantic token colors, and line height
 - Scratch files similar to JetBrains IDEA
-- Project search behavior closer to IDEA
+- Scratch selector on `Cmd-Shift-N` with file-type picker
+- Project panel styling and structure closer to IDEA, including a permanent Scratches section
+- Project search behavior closer to IDEA, including a split search modal with results and editable file preview
 - Local history for file changes
 - Left and right tool-window rails for dock panels
 - Full-width bottom dock by default for terminal, Git, diagnostics, and debugger panels

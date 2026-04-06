@@ -10,11 +10,11 @@
   // - "light": Use the theme indicated by the "light" field
   // - "dark": Use the theme indicated by the "dark" field
   "theme": {
-    "mode": "system",
-    "light": "One Light",
-    "dark": "JetBrains Dark Built-in",
+    "mode": "dark",
+    "light": "JetBrains Dark",
+    "dark": "JetBrains Dark",
   },
-  "icon_theme": "Zed (Default)",
+  "icon_theme": "JetBrains New UI Icons (Dark)",
   // The name of a base set of key bindings to use.
   // This setting can take six values, each named after another
   // text editor:
@@ -25,7 +25,7 @@
   // 4. "None"
   // 5. "SublimeText"
   // 6. "TextMate"
-  "base_keymap": "VSCode",
+  "base_keymap": "JetBrains",
   // The name of a font to use for rendering text in the editor
   // Defaults to JetBrains Mono to better match JetBrains IDEs when the font is installed.
   "buffer_font_family": "JetBrains Mono",
@@ -51,7 +51,9 @@
   //         "buffer_line_height": {
   //           "custom": 2
   //         },
-  "buffer_line_height": "standard",
+  "buffer_line_height": {
+    "custom": 1.7
+  },
   // The name of a font to use for rendering text in the UI
   // You can set this to ".SystemUIFont" to use the system font
   "ui_font_family": ".SystemUIFont",
@@ -248,7 +250,7 @@
   //    "line"
   // 4. Highlight the full line (default):
   //    "all"
-  "current_line_highlight": "all",
+  "current_line_highlight": "none",
   // Whether to highlight all occurrences of the selected text in an editor.
   "selection_highlight": true,
   // Whether the text selection should have rounded corners.
@@ -314,7 +316,7 @@
   // If `auto_signature_help` is enabled, this setting will be treated as enabled also.
   "show_signature_help_after_edits": false,
   // Whether to show code action button at start of buffer line.
-  "inline_code_actions": true,
+  "inline_code_actions": false,
   // Whether to allow drag and drop text selection in buffer.
   "drag_and_drop_selection": {
     // When true, enables drag and drop text selection in buffer.
@@ -439,7 +441,7 @@
   // Toolbar related settings
   "toolbar": {
     // Whether to show breadcrumbs.
-    "breadcrumbs": true,
+    "breadcrumbs": false,
     // Whether to show quick action buttons.
     "quick_actions": true,
     // Whether to show the Selections menu in the editor toolbar.
@@ -593,11 +595,11 @@
     // Whether to show line numbers in the gutter.
     "line_numbers": true,
     // Whether to show runnables buttons in the gutter.
-    "runnables": true,
+    "runnables": false,
     // Whether to show breakpoints in the gutter.
     "breakpoints": true,
     // Whether to show fold buttons in the gutter.
-    "folds": true,
+    "folds": false,
     // Minimum number of characters to reserve space for in the gutter.
     "min_line_number_digits": 4,
   },
@@ -1494,7 +1496,7 @@
     // Control whether the git blame information is shown inline,
     // in the currently focused line.
     "inline_blame": {
-      "enabled": true,
+      "enabled": false,
       // Sets a delay after which the inline blame information is shown.
       // Delay is restarted with every cursor movement.
       "delay_ms": 0,
@@ -2376,7 +2378,48 @@
     // ]
     //
     // Default rules are viewable via the "zed: show default semantic token rules" action.
-    "semantic_token_rules": [],
+    "semantic_token_rules": [
+      {
+        "token_type": "function",
+        "token_modifiers": ["definition", "signature"],
+        "foreground_color": "#56a8f5"
+      },
+      {
+        "token_type": "method",
+        "token_modifiers": ["definition", "signature"],
+        "foreground_color": "#56a8f5"
+      },
+      {
+        "token_type": "function",
+        "token_modifiers": ["defaultLibrary"]
+      },
+      {
+        "token_type": "function",
+        "token_modifiers": [],
+        "foreground_color": "#b09d79"
+      },
+      {
+        "token_type": "method",
+        "token_modifiers": [],
+        "foreground_color": "#b09d79"
+      },
+      {
+        "token_type": "variable",
+        "token_modifiers": ["readonly", "defaultLibrary"],
+        "foreground_color": "#cf8e6d",
+        "font_style": "normal"
+      },
+      {
+        "token_type": "variable",
+        "token_modifiers": ["readonly", "number"],
+        "style": ["constant"]
+      },
+      {
+        "token_type": "variable",
+        "token_modifiers": [],
+        "foreground_color": "#bcbec4"
+      }
+    ],
   },
   // Jupyter settings
   "jupyter": {
