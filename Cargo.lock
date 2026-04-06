@@ -22032,6 +22032,7 @@ dependencies = [
  "smol",
  "snippet_provider",
  "snippets_ui",
+ "sqlx",
  "svg_preview",
  "sysinfo 0.37.2",
  "system_specs",

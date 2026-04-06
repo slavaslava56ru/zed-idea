@@ -4,8 +4,6 @@ use crate::{DraggedDock, Event, FocusFollowsMouse, ModalLayer, Pane, WorkspaceSe
 use crate::{Workspace, status_bar::StatusItemView};
 use anyhow::Context as _;
 use client::proto;
-use db::kvp::KeyValueStore;
-
 use gpui::{
     Action, AnyView, App, Axis, Context, Corner, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, IntoElement, KeyContext, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
@@ -30,6 +28,12 @@ pub enum PanelEvent {
     Close,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PanelSizePersistence {
+    PerWorkspace,
+    Global,
+}
+
 pub use proto::PanelId;
 
 pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
@@ -44,6 +48,9 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     }
     fn initial_size_state(&self, _window: &Window, _cx: &App) -> PanelSizeState {
         PanelSizeState::default()
+    }
+    fn size_persistence_mode(&self, _window: &Window, _cx: &App) -> PanelSizePersistence {
+        PanelSizePersistence::PerWorkspace
     }
     fn size_state_changed(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
     fn supports_flexible_size(&self) -> bool {
@@ -103,6 +110,7 @@ pub trait PanelHandle: Send + Sync {
     fn default_size(&self, window: &Window, cx: &App) -> Pixels;
     fn minimum_size(&self, window: &Window, cx: &App) -> Option<Pixels>;
     fn initial_size_state(&self, window: &Window, cx: &App) -> PanelSizeState;
+    fn size_persistence_mode(&self, window: &Window, cx: &App) -> PanelSizePersistence;
     fn size_state_changed(&self, window: &mut Window, cx: &mut App);
     fn supports_flexible_size(&self, cx: &App) -> bool;
     fn has_flexible_size(&self, window: &Window, cx: &App) -> bool;
@@ -191,6 +199,10 @@ where
 
     fn initial_size_state(&self, window: &Window, cx: &App) -> PanelSizeState {
         self.read(cx).initial_size_state(window, cx)
+    }
+
+    fn size_persistence_mode(&self, window: &Window, cx: &App) -> PanelSizePersistence {
+        self.read(cx).size_persistence_mode(window, cx)
     }
 
     fn size_state_changed(&self, window: &mut Window, cx: &mut App) {
@@ -353,7 +365,7 @@ fn resize_panel_entry(
     flex: Option<f32>,
     window: &mut Window,
     cx: &mut App,
-) -> (&'static str, PanelSizeState) {
+) -> (&'static str, PanelSizePersistence, PanelSizeState) {
     let minimum_size = entry
         .panel
         .minimum_size(window, cx)
@@ -366,7 +378,11 @@ fn resize_panel_entry(
         entry.size_state.size = size;
     }
     entry.panel.size_state_changed(window, cx);
-    (entry.panel.panel_key(), entry.size_state)
+    (
+        entry.panel.panel_key(),
+        entry.panel.size_persistence_mode(window, cx),
+        entry.size_state,
+    )
 }
 
 impl Dock {
@@ -924,6 +940,7 @@ impl Dock {
             entry.size_state.flex = current_flex;
         }
         let panel_key = entry.panel.panel_key();
+        let persistence_mode = entry.panel.size_persistence_mode(window, cx);
         let size_state = entry.size_state;
         let workspace = self.workspace.clone();
         entry
@@ -933,7 +950,12 @@ impl Dock {
         cx.defer(move |cx| {
             if let Some(workspace) = workspace.upgrade() {
                 workspace.update(cx, |workspace, cx| {
-                    workspace.persist_panel_size_state(panel_key, size_state, cx);
+                    workspace.persist_panel_size_state_with_mode(
+                        panel_key,
+                        persistence_mode,
+                        size_state,
+                        cx,
+                    );
                 });
             }
         });
@@ -950,14 +972,19 @@ impl Dock {
         if let Some(index) = self.active_panel_index
             && let Some(entry) = self.panel_entries.get_mut(index)
         {
-            let (panel_key, size_state) =
+            let (panel_key, persistence_mode, size_state) =
                 resize_panel_entry(self.position, entry, size, flex, window, cx);
 
             let workspace = self.workspace.clone();
             cx.defer(move |cx| {
                 if let Some(workspace) = workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
-                        workspace.persist_panel_size_state(panel_key, size_state, cx);
+                        workspace.persist_panel_size_state_with_mode(
+                            panel_key,
+                            persistence_mode,
+                            size_state,
+                            cx,
+                        );
                     });
                 }
             });
@@ -982,8 +1009,13 @@ impl Dock {
         cx.defer(move |cx| {
             if let Some(workspace) = workspace.upgrade() {
                 workspace.update(cx, |workspace, cx| {
-                    for (panel_key, size_state) in size_states_to_persist {
-                        workspace.persist_panel_size_state(panel_key, size_state, cx);
+                    for (panel_key, persistence_mode, size_state) in size_states_to_persist {
+                        workspace.persist_panel_size_state_with_mode(
+                            panel_key,
+                            persistence_mode,
+                            size_state,
+                            cx,
+                        );
                     }
                 });
             }
@@ -1027,24 +1059,6 @@ impl Dock {
 
     pub(crate) fn has_panels(&self) -> bool {
         !self.panel_entries.is_empty()
-    }
-
-    pub(crate) fn load_persisted_size_state(
-        workspace: &Workspace,
-        panel_key: &'static str,
-        cx: &App,
-    ) -> Option<PanelSizeState> {
-        let workspace_id = workspace
-            .database_id()
-            .map(|id| i64::from(id).to_string())
-            .or(workspace.session_id())?;
-        let kvp = KeyValueStore::global(cx);
-        let scope = kvp.scoped(PANEL_SIZE_STATE_KEY);
-        scope
-            .read(&format!("{workspace_id}:{panel_key}"))
-            .log_err()
-            .flatten()
-            .and_then(|json| serde_json::from_str::<PanelSizeState>(&json).log_err())
     }
 }
 
@@ -1467,6 +1481,7 @@ pub mod test {
         pub focus_handle: FocusHandle,
         pub default_size: Pixels,
         pub flexible: bool,
+        pub size_persistence_mode: PanelSizePersistence,
         pub activation_priority: u32,
     }
     actions!(test_only, [ToggleTestPanel]);
@@ -1482,6 +1497,7 @@ pub mod test {
                 focus_handle: cx.focus_handle(),
                 default_size: px(300.),
                 flexible: false,
+                size_persistence_mode: PanelSizePersistence::PerWorkspace,
                 activation_priority,
             }
         }
@@ -1493,6 +1509,13 @@ pub mod test {
         ) -> Self {
             Self {
                 flexible: true,
+                ..Self::new(position, activation_priority, cx)
+            }
+        }
+
+        pub fn new_global(position: DockPosition, activation_priority: u32, cx: &mut App) -> Self {
+            Self {
+                size_persistence_mode: PanelSizePersistence::Global,
                 ..Self::new(position, activation_priority, cx)
             }
         }
@@ -1535,6 +1558,10 @@ pub mod test {
                 size: None,
                 flex: None,
             }
+        }
+
+        fn size_persistence_mode(&self, _window: &Window, _: &App) -> PanelSizePersistence {
+            self.size_persistence_mode
         }
 
         fn supports_flexible_size(&self) -> bool {

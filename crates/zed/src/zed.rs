@@ -1,4 +1,5 @@
 mod app_menus;
+pub(crate) mod database_panel;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_only_instance;
@@ -18,6 +19,7 @@ use agent_ui::AgentDiffToolbar;
 use anyhow::Context as _;
 pub use app_menus::*;
 use assets::Assets;
+use database_panel::{DatabasePanel, DatabaseQueryConsoleToolbarItemView};
 
 use breadcrumbs::Breadcrumbs;
 use client::zed_urls;
@@ -650,6 +652,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
+        let database_panel = DatabasePanel::load(workspace_handle.clone(), cx.clone());
         let channels_panel =
             collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
         let notification_panel = collab_ui::notification_panel::NotificationPanel::load(
@@ -678,6 +681,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(database_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(notification_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
@@ -1219,6 +1223,9 @@ fn initialize_pane(
             let quick_action_bar =
                 cx.new(|cx| QuickActionBar::new(buffer_search_bar, workspace, cx));
             toolbar.add_item(quick_action_bar, window, cx);
+            let database_query_console_toolbar =
+                cx.new(|_| DatabaseQueryConsoleToolbarItemView::new());
+            toolbar.add_item(database_query_console_toolbar, window, cx);
             let diagnostic_editor_controls = cx.new(|_| diagnostics::ToolbarControls::new());
             toolbar.add_item(diagnostic_editor_controls, window, cx);
             let project_search_bar = cx.new(|_| ProjectSearchBar::new());
@@ -5190,6 +5197,7 @@ mod tests {
             project_panel::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
+            database_panel::init(cx);
             copilot_chat::init(
                 app_state.fs.clone(),
                 app_state.client.http_client(),

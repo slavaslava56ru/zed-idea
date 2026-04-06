@@ -2192,7 +2192,21 @@ impl Workspace {
         panel_key: &'static str,
         cx: &App,
     ) -> Option<dock::PanelSizeState> {
-        dock::Dock::load_persisted_size_state(self, panel_key, cx)
+        self.persisted_panel_size_state_with_mode(
+            panel_key,
+            dock::PanelSizePersistence::PerWorkspace,
+            cx,
+        )
+    }
+
+    pub fn persisted_panel_size_state_with_mode(
+        &self,
+        panel_key: &'static str,
+        persistence_mode: dock::PanelSizePersistence,
+        cx: &App,
+    ) -> Option<dock::PanelSizeState> {
+        let storage_key = self.panel_size_storage_key(panel_key, persistence_mode)?;
+        self.load_persisted_panel_size_state(&storage_key, cx)
     }
 
     pub fn persist_panel_size_state(
@@ -2201,26 +2215,64 @@ impl Workspace {
         size_state: dock::PanelSizeState,
         cx: &mut App,
     ) {
-        let Some(workspace_id) = self
-            .database_id()
-            .map(|id| i64::from(id).to_string())
-            .or(self.session_id())
-        else {
+        self.persist_panel_size_state_with_mode(
+            panel_key,
+            dock::PanelSizePersistence::PerWorkspace,
+            size_state,
+            cx,
+        );
+    }
+
+    pub fn persist_panel_size_state_with_mode(
+        &self,
+        panel_key: &str,
+        persistence_mode: dock::PanelSizePersistence,
+        size_state: dock::PanelSizeState,
+        cx: &mut App,
+    ) {
+        let Some(storage_key) = self.panel_size_storage_key(panel_key, persistence_mode) else {
             return;
         };
 
         let kvp = db::kvp::KeyValueStore::global(cx);
-        let panel_key = panel_key.to_string();
         cx.background_spawn(async move {
             let scope = kvp.scoped(dock::PANEL_SIZE_STATE_KEY);
             scope
-                .write(
-                    format!("{workspace_id}:{panel_key}"),
-                    serde_json::to_string(&size_state)?,
-                )
+                .write(storage_key, serde_json::to_string(&size_state)?)
                 .await
         })
         .detach_and_log_err(cx);
+    }
+
+    fn panel_size_storage_key(
+        &self,
+        panel_key: &str,
+        persistence_mode: dock::PanelSizePersistence,
+    ) -> Option<String> {
+        match persistence_mode {
+            dock::PanelSizePersistence::PerWorkspace => {
+                let workspace_id = self
+                    .database_id()
+                    .map(|id| i64::from(id).to_string())
+                    .or(self.session_id())?;
+                Some(format!("{workspace_id}:{panel_key}"))
+            }
+            dock::PanelSizePersistence::Global => Some(format!("global:{panel_key}")),
+        }
+    }
+
+    fn load_persisted_panel_size_state(
+        &self,
+        storage_key: &str,
+        cx: &App,
+    ) -> Option<dock::PanelSizeState> {
+        let kvp = db::kvp::KeyValueStore::global(cx);
+        let scope = kvp.scoped(dock::PANEL_SIZE_STATE_KEY);
+        scope
+            .read(storage_key)
+            .log_err()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<dock::PanelSizeState>(&json).log_err())
     }
 
     pub fn set_panel_size_state<T: Panel>(
@@ -2234,12 +2286,18 @@ impl Workspace {
         };
 
         let dock = self.dock_at_position(panel.position(window, cx));
+        let persistence_mode = panel.read(cx).size_persistence_mode(window, cx);
         let did_set = dock.update(cx, |dock, cx| {
             dock.set_panel_size_state(&panel, size_state, cx)
         });
 
         if did_set {
-            self.persist_panel_size_state(T::panel_key(), size_state, cx);
+            self.persist_panel_size_state_with_mode(
+                T::panel_key(),
+                persistence_mode,
+                size_state,
+                cx,
+            );
         }
 
         did_set
@@ -2380,18 +2438,40 @@ impl Workspace {
         let dock_position = panel.position(window, cx);
         let dock = self.dock_at_position(dock_position);
         let any_panel = panel.to_any();
-        let persisted_size_state =
-            self.persisted_panel_size_state(T::panel_key(), cx)
-                .or_else(|| {
-                    load_legacy_panel_size(T::panel_key(), dock_position, self, cx).map(|size| {
-                        let state = dock::PanelSizeState {
-                            size: Some(size),
-                            flex: None,
-                        };
-                        self.persist_panel_size_state(T::panel_key(), state, cx);
-                        state
-                    })
-                });
+        let persistence_mode = panel.read(cx).size_persistence_mode(window, cx);
+        let persisted_size_state = self
+            .persisted_panel_size_state_with_mode(T::panel_key(), persistence_mode, cx)
+            .or_else(|| {
+                if persistence_mode == dock::PanelSizePersistence::Global {
+                    let state = self.persisted_panel_size_state(T::panel_key(), cx);
+                    if let Some(state) = state {
+                        self.persist_panel_size_state_with_mode(
+                            T::panel_key(),
+                            persistence_mode,
+                            state,
+                            cx,
+                        );
+                    }
+                    state
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                load_legacy_panel_size(T::panel_key(), dock_position, self, cx).map(|size| {
+                    let state = dock::PanelSizeState {
+                        size: Some(size),
+                        flex: None,
+                    };
+                    self.persist_panel_size_state_with_mode(
+                        T::panel_key(),
+                        persistence_mode,
+                        state,
+                        cx,
+                    );
+                    state
+                })
+            });
 
         dock.update(cx, |dock, cx| {
             let index = dock.add_panel(panel.clone(), self.weak_self.clone(), window, cx);
@@ -12749,6 +12829,69 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[gpui::test]
+    async fn test_global_panel_size_state_persistence(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        workspace.update(cx, |workspace, _cx| {
+            workspace.set_random_database_id();
+            workspace.bounds.size.width = px(800.);
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| TestPanel::new_global(DockPosition::Right, 100, cx));
+            workspace.add_panel(panel, window, cx);
+            workspace.toggle_dock(DockPosition::Right, window, cx);
+            workspace.resize_right_dock(px(360.), window, cx);
+        });
+
+        cx.run_until_parked();
+
+        let persisted = workspace.read_with(cx, |workspace, cx| {
+            workspace.persisted_panel_size_state_with_mode(
+                TestPanel::panel_key(),
+                dock::PanelSizePersistence::Global,
+                cx,
+            )
+        });
+        assert_eq!(
+            persisted.and_then(|size_state| size_state.size),
+            Some(px(360.)),
+            "global panel size should be written under the global persistence key"
+        );
+
+        let project = Project::test(fs, [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        workspace.update(cx, |workspace, _cx| {
+            workspace.set_random_database_id();
+            workspace.bounds.size.width = px(900.);
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| TestPanel::new_global(DockPosition::Right, 100, cx));
+            workspace.add_panel(panel, window, cx);
+
+            let right_dock = workspace.right_dock().read(cx);
+            let size_state = right_dock
+                .panel::<TestPanel>()
+                .and_then(|panel| right_dock.stored_panel_size_state(&panel));
+            assert_eq!(
+                size_state.and_then(|size_state| size_state.size),
+                Some(px(360.)),
+                "global panel size should restore in a different workspace"
+            );
+        });
     }
 
     #[gpui::test]

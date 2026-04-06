@@ -190,6 +190,7 @@ sidebar.workspace = true
 smol.workspace = true
 snippet_provider.workspace = true
 snippets_ui.workspace = true
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "mysql", "any", "chrono"] }
 svg_preview.workspace = true
 sysinfo.workspace = true
 tab_switcher.workspace = true

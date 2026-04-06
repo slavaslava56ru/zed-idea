@@ -26,7 +26,7 @@ use workspace::notifications::{
 };
 use workspace::{
     Workspace,
-    dock::{DockPosition, Panel, PanelEvent},
+    dock::{DockPosition, Panel, PanelEvent, PanelSizePersistence},
 };
 
 const LOADING_THRESHOLD: usize = 30;
@@ -591,6 +591,10 @@ impl Panel for NotificationPanel {
 
     fn default_size(&self, _: &Window, cx: &App) -> Pixels {
         NotificationPanelSettings::get_global(cx).default_width
+    }
+
+    fn size_persistence_mode(&self, _window: &Window, _cx: &App) -> PanelSizePersistence {
+        PanelSizePersistence::Global
     }
 
     fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {

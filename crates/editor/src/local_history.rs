@@ -25,8 +25,7 @@ use workspace::ModalView;
 use workspace::Workspace;
 
 use crate::{
-    Autoscroll, CurrentLineHighlight, Editor, MultiBuffer, SplittableEditor,
-    persistence::EditorDb,
+    Autoscroll, CurrentLineHighlight, Editor, MultiBuffer, SplittableEditor, persistence::EditorDb,
 };
 
 const LOCAL_HISTORY_ENTRY_LIMIT: i64 = 100;
@@ -593,16 +592,14 @@ impl LocalHistoryModal {
                             .truncate(),
                     ),
             )
-            .end_slot(
-                h_flex().children(context_menu.map(|menu| {
-                    deferred(
-                        anchored()
-                            .anchor(gpui::Corner::TopRight)
-                            .child(menu.clone()),
-                    )
-                    .with_priority(1)
-                })),
-            )
+            .end_slot(h_flex().children(context_menu.map(|menu| {
+                deferred(
+                    anchored()
+                        .anchor(gpui::Corner::TopRight)
+                        .child(menu.clone()),
+                )
+                .with_priority(1)
+            })))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_entry(entry_id, cx);
             }))

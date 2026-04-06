@@ -80,7 +80,7 @@ use util::{ResultExt as _, debug_panic};
 use workspace::{
     CollaboratorId, DraggedSelection, DraggedTab, OpenMode, OpenResult, PathList,
     SerializedPathList, ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
-    dock::{DockPosition, Panel, PanelEvent},
+    dock::{DockPosition, Panel, PanelEvent, PanelSizePersistence},
 };
 use zed_actions::{
     DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize,
@@ -2838,6 +2838,10 @@ impl Panel for AgentPanel {
             DockPosition::Left | DockPosition::Right => settings.default_width,
             DockPosition::Bottom => settings.default_height,
         }
+    }
+
+    fn size_persistence_mode(&self, _window: &Window, _cx: &App) -> PanelSizePersistence {
+        PanelSizePersistence::Global
     }
 
     fn minimum_size(&self, window: &Window, cx: &App) -> Option<Pixels> {

@@ -3209,7 +3209,7 @@ mod tests {
             ccc
             ddd
             eee"
-                .unindent(),
+            .unindent(),
             "
             § <no file>
             § -----
@@ -3220,7 +3220,7 @@ mod tests {
             ccc
             ddd
             eee"
-                .unindent(),
+            .unindent(),
             &mut cx,
         );
 
@@ -3252,7 +3252,7 @@ mod tests {
             ccc
             ddd
             eee"
-                .unindent(),
+            .unindent(),
             "
             § <no file>
             § -----
@@ -3261,7 +3261,7 @@ mod tests {
             ccc
             ddd
             eee"
-                .unindent(),
+            .unindent(),
             &mut cx,
         );
 
@@ -3282,7 +3282,7 @@ mod tests {
             ccc
             ddd
             eee"
-                .unindent(),
+            .unindent(),
             "
             § <no file>
             § -----
@@ -3291,7 +3291,7 @@ mod tests {
             ccc
             ddd
             eee"
-                .unindent(),
+            .unindent(),
             &mut cx,
         );
     }

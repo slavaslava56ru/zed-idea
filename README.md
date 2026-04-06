@@ -12,6 +12,7 @@ This fork currently differs from upstream Zed in a few JetBrains IDEA-inspired w
 - Local history for file changes
 - Left and right tool-window rails for dock panels
 - Full-width bottom dock by default for terminal, Git, diagnostics, and debugger panels
+- Database panel with PostgreSQL and MySQL/MariaDB connections plus a SQL query console
 
 ---
 
