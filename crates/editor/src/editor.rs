@@ -252,6 +252,7 @@ pub(crate) const CURSORS_VISIBLE_FOR: Duration = Duration::from_millis(2000);
 #[doc(hidden)]
 pub const CODE_ACTIONS_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
 pub const SELECTION_HIGHLIGHT_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(100);
+const GO_FILL_ALL_FIELDS_CACHE_DISTANCE: usize = 64;
 
 pub(crate) const CODE_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const FORMAT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1211,6 +1212,7 @@ pub struct Editor {
     find_all_references_task_sources: Vec<Anchor>,
     next_completion_id: CompletionId,
     available_code_actions: Option<(Location, Rc<[AvailableCodeAction]>)>,
+    cached_go_fill_all_fields_action: Option<CachedGoFillAllFieldsAction>,
     code_actions_task: Option<Task<Result<()>>>,
     quick_selection_highlight_task: Option<(Range<Anchor>, Task<()>)>,
     debounced_selection_highlight_task: Option<(Range<Anchor>, Task<()>)>,
@@ -2451,6 +2453,7 @@ impl Editor {
             next_inlay_id: 0,
             code_action_providers,
             available_code_actions: None,
+            cached_go_fill_all_fields_action: None,
             code_actions_task: None,
             quick_selection_highlight_task: None,
             debounced_selection_highlight_task: None,
@@ -6419,6 +6422,24 @@ impl Editor {
                     .into_iter()
                     .flat_map(|response| response.completions),
             );
+            if matches!(
+                language.as_ref().map(|language| language.as_ref()),
+                Some("Go")
+            ) {
+                if let Some(fill_all_fields_completion) = editor
+                    .read_with(cx, |editor_state, cx| {
+                        editor_state.go_fill_all_fields_completion(
+                            editor.clone(),
+                            word_replace_range.clone(),
+                            cx,
+                        )
+                    })
+                    .ok()
+                    .flatten()
+                {
+                    completions.push(fill_all_fields_completion);
+                }
+            }
 
             let menu = if completions.is_empty() {
                 None
@@ -7110,7 +7131,6 @@ impl Editor {
 
         let action_ix = action.item_ix.unwrap_or(actions_menu.selected_item);
         let action = actions_menu.actions.get(action_ix)?;
-        let title = action.label();
         let buffer = actions_menu.buffer;
         let workspace = self.workspace()?;
 
@@ -7129,20 +7149,7 @@ impl Editor {
                 })
             }
             CodeActionsItem::CodeAction { action, provider } => {
-                let apply_code_action =
-                    provider.apply_code_action(buffer, action, true, window, cx);
-                let workspace = workspace.downgrade();
-                Some(cx.spawn_in(window, async move |editor, cx| {
-                    let project_transaction = apply_code_action.await?;
-                    Self::open_project_transaction(
-                        &editor,
-                        workspace,
-                        project_transaction,
-                        title,
-                        cx,
-                    )
-                    .await
-                }))
+                self.spawn_code_action_task(buffer, action, provider, window, cx)
             }
             CodeActionsItem::DebugScenario(scenario) => {
                 let context = actions_menu.actions.context.into();
@@ -7347,6 +7354,161 @@ impl Editor {
             .is_some_and(|(_, actions)| !actions.is_empty())
     }
 
+    fn spawn_code_action_task_for_provider_id(
+        &self,
+        buffer: Entity<Buffer>,
+        action: CodeAction,
+        provider_id: Arc<str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<Result<()>>> {
+        let provider = self
+            .code_action_providers
+            .iter()
+            .find(|provider| provider.id() == provider_id)
+            .cloned()?;
+
+        self.spawn_code_action_task(buffer, action, provider, window, cx)
+    }
+
+    fn spawn_code_action_task(
+        &self,
+        buffer: Entity<Buffer>,
+        action: CodeAction,
+        provider: Rc<dyn CodeActionProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<Result<()>>> {
+        let title = action.lsp_action.title().to_owned();
+        let workspace = self.workspace()?.downgrade();
+        let editor = cx.entity().downgrade();
+        let multibuffer = self.buffer.clone();
+        let transaction_id_prev = multibuffer.read(cx).last_transaction_id(cx);
+        let selections_prev = self.selections.disjoint_anchors_arc();
+        let apply_code_action = provider.apply_code_action(buffer, action, true, window, cx);
+
+        Some(cx.spawn_in(window, async move |_, cx| {
+            let project_transaction = apply_code_action.await?;
+            multibuffer.update(cx, |buffer, cx| {
+                if !buffer.is_singleton() && !project_transaction.0.is_empty() {
+                    buffer.push_transaction(&project_transaction.0, cx);
+                }
+                cx.notify();
+            });
+
+            if let Some(transaction_id_now) = multibuffer.read_with(cx, |buffer, cx| {
+                buffer.last_transaction_id(cx)
+            }) {
+                if transaction_id_prev != Some(transaction_id_now) {
+                    editor.update(cx, |editor, _| {
+                        editor
+                            .selection_history
+                            .insert_transaction(transaction_id_now, selections_prev.clone());
+                    })?;
+                }
+            }
+
+            Self::open_project_transaction(&editor, workspace, project_transaction, title, cx).await
+        }))
+    }
+
+    fn go_fill_all_fields_action_from_available_code_actions(
+        &self,
+    ) -> Option<GoFillAllFieldsAction> {
+        let (location, actions) = self.available_code_actions.as_ref()?;
+        actions
+            .iter()
+            .find(|available_action| is_go_fill_all_fields_action(&available_action.action))
+            .map(|available_action| GoFillAllFieldsAction {
+                buffer: location.buffer.clone(),
+                action: available_action.action.clone(),
+                provider_id: available_action.provider.id(),
+            })
+    }
+
+    fn cached_go_fill_all_fields_action_for_buffer_anchor(
+        &self,
+        buffer: Entity<Buffer>,
+        anchor: text::Anchor,
+        cx: &App,
+    ) -> Option<GoFillAllFieldsAction> {
+        let cached_action = self.cached_go_fill_all_fields_action.as_ref()?;
+        if buffer != cached_action.location.buffer {
+            return None;
+        }
+
+        let buffer_snapshot = buffer.read(cx).snapshot();
+        let current_offset = anchor.to_offset(&buffer_snapshot);
+        let cached_offset = cached_action
+            .location
+            .range
+            .start
+            .to_offset(&buffer_snapshot);
+
+        if current_offset.abs_diff(cached_offset) > GO_FILL_ALL_FIELDS_CACHE_DISTANCE {
+            return None;
+        }
+
+        Some(cached_action.action.clone())
+    }
+
+    fn go_fill_all_fields_completion(
+        &self,
+        editor: WeakEntity<Self>,
+        replace_range: Range<text::Anchor>,
+        cx: &App,
+    ) -> Option<Completion> {
+        let action = self
+            .go_fill_all_fields_action_from_available_code_actions()
+            .or_else(|| {
+                self.active_buffer(cx).and_then(|buffer| {
+                    self.cached_go_fill_all_fields_action_for_buffer_anchor(
+                        buffer,
+                        replace_range.start.clone(),
+                        cx,
+                    )
+                })
+            })?;
+
+        let buffer = action.buffer.clone();
+        let code_action = action.action.clone();
+        let provider_id = action.provider_id.clone();
+
+        Some(Completion {
+            replace_range,
+            new_text: String::new(),
+            label: CodeLabel::plain("Fill All Fields".to_string(), None),
+            documentation: None,
+            source: CompletionSource::Custom,
+            icon_path: None,
+            match_start: None,
+            snippet_deduplication_key: None,
+            insert_text_mode: Some(InsertTextMode::AS_IS),
+            confirm: Some(Arc::new(move |_, window, cx| {
+                let buffer = buffer.clone();
+                let code_action = code_action.clone();
+                let provider_id = provider_id.clone();
+                let editor = editor.clone();
+                window.defer(cx, move |window, cx| {
+                    editor
+                        .update(cx, |editor, cx| {
+                            if let Some(task) = editor.spawn_code_action_task_for_provider_id(
+                                buffer,
+                                code_action,
+                                provider_id,
+                                window,
+                                cx,
+                            ) {
+                                editor.detach_and_notify_err(task, window, cx);
+                            }
+                        })
+                        .ok();
+                });
+                false
+            })),
+        })
+    }
+
     fn render_inline_code_actions(
         &self,
         icon_size: ui::IconSize,
@@ -7449,16 +7611,29 @@ impl Editor {
             }
 
             this.update(cx, |this, cx| {
+                let location = Location {
+                    buffer: start_buffer,
+                    range: start..end,
+                };
+
+                this.cached_go_fill_all_fields_action =
+                    cached_go_fill_all_fields_action_from_available_actions(&location, &actions)
+                        .or_else(|| {
+                            this.cached_go_fill_all_fields_action
+                                .take()
+                                .filter(|cached_action| {
+                                    should_keep_cached_go_fill_all_fields_action(
+                                        cached_action,
+                                        &location,
+                                        cx,
+                                    )
+                                })
+                        });
+
                 this.available_code_actions = if actions.is_empty() {
                     None
                 } else {
-                    Some((
-                        Location {
-                            buffer: start_buffer,
-                            range: start..end,
-                        },
-                        actions.into(),
-                    ))
+                    Some((location, actions.into()))
                 };
                 cx.notify();
             })
@@ -27228,6 +27403,102 @@ impl CodeActionProvider for Entity<Project> {
         self.update(cx, |project, cx| {
             project.apply_code_action(buffer_handle, action, push_to_history, cx)
         })
+    }
+}
+
+#[derive(Clone)]
+struct GoFillAllFieldsAction {
+    buffer: Entity<Buffer>,
+    action: CodeAction,
+    provider_id: Arc<str>,
+}
+
+#[derive(Clone)]
+struct CachedGoFillAllFieldsAction {
+    location: Location,
+    action: GoFillAllFieldsAction,
+}
+
+fn cached_go_fill_all_fields_action_from_available_actions(
+    location: &Location,
+    actions: &[AvailableCodeAction],
+) -> Option<CachedGoFillAllFieldsAction> {
+    actions
+        .iter()
+        .find(|available_action| is_go_fill_all_fields_action(&available_action.action))
+        .map(|available_action| CachedGoFillAllFieldsAction {
+            location: location.clone(),
+            action: GoFillAllFieldsAction {
+                buffer: location.buffer.clone(),
+                action: available_action.action.clone(),
+                provider_id: available_action.provider.id(),
+            },
+        })
+}
+
+fn should_keep_cached_go_fill_all_fields_action(
+    cached_action: &CachedGoFillAllFieldsAction,
+    location: &Location,
+    cx: &App,
+) -> bool {
+    if cached_action.location.buffer != location.buffer {
+        return false;
+    }
+
+    let snapshot = location.buffer.read(cx).snapshot();
+    let cached_offset = cached_action.location.range.start.to_offset(&snapshot);
+    let current_offset = location.range.start.to_offset(&snapshot);
+
+    cached_offset.abs_diff(current_offset) <= GO_FILL_ALL_FIELDS_CACHE_DISTANCE
+}
+
+fn is_go_fill_all_fields_action(action: &CodeAction) -> bool {
+    is_go_fill_all_fields_action_kind(action.lsp_action.action_kind().as_ref())
+        || is_go_fill_all_fields_action_title(action.lsp_action.title())
+}
+
+fn is_go_fill_all_fields_action_kind(kind: Option<&lsp::CodeActionKind>) -> bool {
+    kind.is_some_and(|kind| {
+        let kind = kind.as_str();
+        kind.contains("fillStruct") || kind.contains("fillstruct") || kind.contains("fill_struct")
+    })
+}
+
+fn is_go_fill_all_fields_action_title(title: &str) -> bool {
+    let title = title.to_ascii_lowercase();
+    let words = title.split_whitespace().collect::<Vec<_>>();
+    title.contains("fill")
+        && (title.contains("struct")
+            || title.contains("field")
+            || words.first() == Some(&"fill") && words.len() == 2)
+}
+
+#[cfg(test)]
+mod go_fill_all_fields_tests {
+    use super::{is_go_fill_all_fields_action_kind, is_go_fill_all_fields_action_title};
+
+    #[test]
+    fn matches_fill_struct_titles() {
+        assert!(is_go_fill_all_fields_action_title("Fill struct"));
+        assert!(is_go_fill_all_fields_action_title("Fill all fields"));
+        assert!(is_go_fill_all_fields_action_title(
+            "Fill missing struct fields"
+        ));
+        assert!(is_go_fill_all_fields_action_title("Fill Person"));
+        assert!(!is_go_fill_all_fields_action_title("Organize imports"));
+    }
+
+    #[test]
+    fn matches_fill_struct_kinds() {
+        assert!(is_go_fill_all_fields_action_kind(Some(
+            &lsp::CodeActionKind::new("refactor.rewrite.fillStruct"),
+        )));
+        assert!(is_go_fill_all_fields_action_kind(Some(
+            &lsp::CodeActionKind::new("quickfix.fill_struct"),
+        )));
+        assert!(!is_go_fill_all_fields_action_kind(Some(
+            &lsp::CodeActionKind::REFACTOR,
+        )));
     }
 }
 

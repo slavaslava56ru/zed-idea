@@ -21268,6 +21268,168 @@ async fn test_context_menus_hide_hover_popover(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_confirm_code_action_restores_selection_on_undo(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorLspTestContext::new_rust(
+        lsp::ServerCapabilities {
+            code_action_provider: Some(lsp::CodeActionProviderCapability::Simple(true)),
+            ..Default::default()
+        },
+        cx,
+    )
+    .await;
+
+    cx.set_state("ˇfn main() {}");
+
+    let mut code_action_requests =
+        cx.set_request_handler::<lsp::request::CodeActionRequest, _, _>(
+            move |buffer_url, _, _| async move {
+                Ok(Some(vec![lsp::CodeActionOrCommand::CodeAction(
+                    lsp::CodeAction {
+                        title: "Insert header".to_string(),
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        edit: Some(lsp::WorkspaceEdit {
+                            changes: Some(
+                                [(
+                                    buffer_url,
+                                    vec![lsp::TextEdit {
+                                        range: lsp::Range::new(
+                                            lsp::Position::new(0, 0),
+                                            lsp::Position::new(0, 0),
+                                        ),
+                                        new_text: "// added\n".to_string(),
+                                    }],
+                                )]
+                                .into_iter()
+                                .collect(),
+                            ),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )]))
+            },
+        );
+
+    cx.update_editor(|editor, window, cx| {
+        editor.toggle_code_actions(
+            &ToggleCodeActions {
+                deployed_from: None,
+                quick_launch: false,
+            },
+            window,
+            cx,
+        );
+    });
+    code_action_requests.next().await;
+    cx.condition(|editor, _| editor.context_menu_visible())
+        .await;
+
+    let apply_code_action = cx
+        .update_editor(|editor, window, cx| {
+            editor.confirm_code_action(&ConfirmCodeAction { item_ix: Some(0) }, window, cx)
+        })
+        .unwrap();
+    apply_code_action.await.unwrap();
+    cx.executor().run_until_parked();
+
+    cx.update_editor(|editor, window, cx| {
+        let end = editor.buffer().read(cx).snapshot(cx).len();
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select_ranges([end..end]);
+        });
+    });
+
+    cx.update_editor(|editor, window, cx| editor.undo(&Undo, window, cx));
+    cx.assert_editor_state("ˇfn main() {}");
+}
+
+#[gpui::test]
+fn test_go_fill_all_fields_completion_confirm_is_deferred(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    struct TestCodeActionProvider;
+
+    impl CodeActionProvider for TestCodeActionProvider {
+        fn id(&self) -> Arc<str> {
+            "test-go-fill-provider".into()
+        }
+
+        fn code_actions(
+            &self,
+            _: &Entity<Buffer>,
+            _: Range<text::Anchor>,
+            _: &mut Window,
+            _: &mut App,
+        ) -> Task<Result<Vec<CodeAction>>> {
+            Task::ready(Ok(Vec::new()))
+        }
+
+        fn apply_code_action(
+            &self,
+            _: Entity<Buffer>,
+            _: CodeAction,
+            _: bool,
+            _: &mut Window,
+            _: &mut App,
+        ) -> Task<Result<ProjectTransaction>> {
+            Task::ready(Ok(ProjectTransaction::default()))
+        }
+    }
+
+    let buffer = cx.new(|cx| Buffer::local("Fill", cx));
+    let multibuffer = cx.new(|cx| MultiBuffer::singleton(buffer, cx));
+    let editor = cx.add_window(|window, cx| build_editor(multibuffer.clone(), window, cx));
+
+    editor
+        .update(cx, |editor, window, cx| {
+        let buffer = editor.buffer().read(cx).as_singleton().unwrap();
+        let buffer_snapshot = buffer.read(cx).snapshot();
+        let location_start = buffer_snapshot.anchor_before(0);
+        let action_start = buffer_snapshot.anchor_before(0);
+        let replace_start = buffer_snapshot.anchor_before(0);
+        let replace_end = buffer_snapshot.anchor_after(4);
+        let provider: Rc<dyn CodeActionProvider> = Rc::new(TestCodeActionProvider);
+
+        editor.available_code_actions = Some((
+            Location {
+                buffer: buffer.clone(),
+                range: location_start.clone()..location_start,
+            },
+            vec![AvailableCodeAction {
+                action: CodeAction {
+                    server_id: LanguageServerId(0),
+                    range: action_start.clone()..action_start,
+                    lsp_action: LspAction::Action(Box::new(lsp::CodeAction {
+                        title: "Fill all fields".to_string(),
+                        kind: Some(CodeActionKind::new("quickfix.fill_struct")),
+                        ..Default::default()
+                    })),
+                    resolved: true,
+                },
+                provider,
+            }]
+            .into(),
+        ));
+
+        let completion = editor
+            .go_fill_all_fields_completion(
+                cx.entity().downgrade(),
+                replace_start..replace_end,
+                cx,
+            )
+            .expect("expected Fill All Fields completion");
+        let confirm = completion
+            .confirm
+            .expect("expected Fill All Fields confirm handler");
+        confirm(CompletionIntent::Complete, window, cx);
+        })
+        .unwrap();
+
+    cx.executor().run_until_parked();
+}
+
+#[gpui::test]
 async fn test_completions_resolve_happens_once(cx: &mut TestAppContext) {
     init_test(cx, |_| {});
 

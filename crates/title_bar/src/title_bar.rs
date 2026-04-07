@@ -60,6 +60,7 @@ pub use stories::*;
 const MAX_PROJECT_NAME_LENGTH: usize = 40;
 const MAX_BRANCH_NAME_LENGTH: usize = 40;
 const MAX_SHORT_SHA_LENGTH: usize = 8;
+const SCRATCH_WORKTREE_ROOT_NAME: &str = "scratch";
 
 actions!(
     collab,
@@ -320,6 +321,10 @@ impl Render for TitleBar {
 }
 
 impl TitleBar {
+    fn is_scratch_worktree(worktree: &project::Worktree) -> bool {
+        worktree.root_name().as_unix_str() == SCRATCH_WORKTREE_ROOT_NAME
+    }
+
     pub fn new(
         id: impl Into<ElementId>,
         workspace: &Workspace,
@@ -417,7 +422,11 @@ impl TitleBar {
     }
 
     fn worktree_count(&self, cx: &App) -> usize {
-        self.project.read(cx).visible_worktrees(cx).count()
+        self.project
+            .read(cx)
+            .visible_worktrees(cx)
+            .filter(|worktree| !Self::is_scratch_worktree(&worktree.read(cx)))
+            .count()
     }
 
     fn toggle_update_simulation(&mut self, cx: &mut Context<Self>) {
@@ -436,7 +445,9 @@ impl TitleBar {
         if let Some(workspace) = self.workspace.upgrade() {
             if let Some(override_id) = workspace.read(cx).active_worktree_override() {
                 if let Some(worktree) = project.worktree_for_id(override_id, cx) {
-                    return Some(worktree);
+                    if !Self::is_scratch_worktree(&worktree.read(cx)) {
+                        return Some(worktree);
+                    }
                 }
             }
         }
@@ -445,7 +456,10 @@ impl TitleBar {
             let repo = repo.read(cx);
             let repo_path = &repo.work_directory_abs_path;
 
-            for worktree in project.visible_worktrees(cx) {
+            for worktree in project
+                .visible_worktrees(cx)
+                .filter(|worktree| !Self::is_scratch_worktree(&worktree.read(cx)))
+            {
                 let worktree_path = worktree.read(cx).abs_path();
                 if worktree_path == *repo_path || worktree_path.starts_with(repo_path.as_ref()) {
                     return Some(worktree);
@@ -453,7 +467,9 @@ impl TitleBar {
             }
         }
 
-        project.visible_worktrees(cx).next()
+        project
+            .visible_worktrees(cx)
+            .find(|worktree| !Self::is_scratch_worktree(&worktree.read(cx)))
     }
 
     pub fn set_active_worktree_override(
@@ -746,40 +762,44 @@ impl TitleBar {
             })
             .unwrap_or_default();
 
-        PopoverMenu::new("recent-projects-menu")
-            .menu(move |window, cx| {
-                Some(recent_projects::RecentProjects::popover(
-                    workspace.clone(),
-                    sibling_workspace_ids.clone(),
-                    false,
-                    focus_handle.clone(),
-                    window,
-                    cx,
-                ))
-            })
-            .trigger_with_tooltip(
-                Button::new("project_name_trigger", display_name)
-                    .label_size(LabelSize::Small)
-                    .when(self.worktree_count(cx) > 1, |this| {
-                        this.end_icon(
-                            Icon::new(IconName::ChevronDown)
-                                .size(IconSize::XSmall)
-                                .color(Color::Muted),
-                        )
+        div()
+            .ml_1()
+            .child(
+                PopoverMenu::new("recent-projects-menu")
+                    .menu(move |window, cx| {
+                        Some(recent_projects::RecentProjects::popover(
+                            workspace.clone(),
+                            sibling_workspace_ids.clone(),
+                            false,
+                            focus_handle.clone(),
+                            window,
+                            cx,
+                        ))
                     })
-                    .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                    .when(!is_project_selected, |s| s.color(Color::Muted)),
-                move |_window, cx| {
-                    Tooltip::for_action(
-                        "Recent Projects",
-                        &zed_actions::OpenRecent {
-                            create_new_window: false,
+                    .trigger_with_tooltip(
+                        Button::new("project_name_trigger", display_name)
+                            .label_size(LabelSize::Large)
+                            .when(self.worktree_count(cx) > 1, |this| {
+                                this.end_icon(
+                                    Icon::new(IconName::ChevronDown)
+                                        .size(IconSize::Small)
+                                        .color(Color::Muted),
+                                )
+                            })
+                            .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                            .when(!is_project_selected, |s| s.color(Color::Muted)),
+                        move |_window, cx| {
+                            Tooltip::for_action(
+                                "Recent Projects",
+                                &zed_actions::OpenRecent {
+                                    create_new_window: false,
+                                },
+                                cx,
+                            )
                         },
-                        cx,
                     )
-                },
+                    .anchor(gpui::Corner::TopLeft),
             )
-            .anchor(gpui::Corner::TopLeft)
             .into_any_element()
     }
 
@@ -809,40 +829,42 @@ impl TitleBar {
             })
             .unwrap_or_default();
 
-        PopoverMenu::new("sidebar-title-recent-projects-menu")
-            .menu(move |window, cx| {
-                Some(recent_projects::RecentProjects::popover(
-                    workspace.clone(),
-                    sibling_workspace_ids.clone(),
-                    false,
-                    focus_handle.clone(),
-                    window,
-                    cx,
-                ))
-            })
-            .trigger_with_tooltip(
-                Button::new("project_name_trigger", display_name)
-                    .label_size(LabelSize::Small)
-                    .when(self.worktree_count(cx) > 1, |this| {
-                        this.end_icon(
-                            Icon::new(IconName::ChevronDown)
-                                .size(IconSize::XSmall)
-                                .color(Color::Muted),
-                        )
-                    })
-                    .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                    .when(!is_project_selected, |s| s.color(Color::Muted)),
-                move |_window, cx| {
-                    Tooltip::for_action(
-                        "Recent Projects",
-                        &zed_actions::OpenRecent {
-                            create_new_window: false,
-                        },
+        div().ml_1().child(
+            PopoverMenu::new("sidebar-title-recent-projects-menu")
+                .menu(move |window, cx| {
+                    Some(recent_projects::RecentProjects::popover(
+                        workspace.clone(),
+                        sibling_workspace_ids.clone(),
+                        false,
+                        focus_handle.clone(),
+                        window,
                         cx,
-                    )
-                },
-            )
-            .anchor(gpui::Corner::TopLeft)
+                    ))
+                })
+                .trigger_with_tooltip(
+                    Button::new("project_name_trigger", display_name)
+                        .label_size(LabelSize::Large)
+                        .when(self.worktree_count(cx) > 1, |this| {
+                            this.end_icon(
+                                Icon::new(IconName::ChevronDown)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                        })
+                        .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                        .when(!is_project_selected, |s| s.color(Color::Muted)),
+                    move |_window, cx| {
+                        Tooltip::for_action(
+                            "Recent Projects",
+                            &zed_actions::OpenRecent {
+                                create_new_window: false,
+                            },
+                            cx,
+                        )
+                    },
+                )
+                .anchor(gpui::Corner::TopLeft),
+        )
     }
 
     fn render_project_branch(
@@ -893,59 +915,62 @@ impl TitleBar {
         let effective_repository = Some(repository);
 
         Some(
-            PopoverMenu::new("branch-menu")
-                .menu(move |window, cx| {
-                    Some(git_ui::git_picker::popover(
-                        workspace.downgrade(),
-                        effective_repository.clone(),
-                        git_ui::git_picker::GitPickerTab::Branches,
-                        gpui::rems(34.),
-                        window,
-                        cx,
-                    ))
-                })
-                .trigger_with_tooltip(
-                    ButtonLike::new("project_branch_trigger")
-                        .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                        .child(
-                            h_flex()
-                                .gap_0p5()
-                                .when(settings.show_branch_icon, |this| {
-                                    let (icon, icon_color) = icon_info;
-                                    this.child(
-                                        Icon::new(icon).size(IconSize::XSmall).color(icon_color),
-                                    )
-                                })
-                                .when_some(linked_worktree_name.as_ref(), |this, worktree_name| {
-                                    this.child(
-                                        Label::new(worktree_name)
-                                            .size(LabelSize::Small)
-                                            .color(Color::Muted),
+            div().ml_1().child(
+                PopoverMenu::new("branch-menu")
+                    .menu(move |window, cx| {
+                        Some(git_ui::branch_picker::title_bar_popover(
+                            workspace.downgrade(),
+                            effective_repository.clone(),
+                            window,
+                            cx,
+                        ))
+                    })
+                    .trigger_with_tooltip(
+                        ButtonLike::new("project_branch_trigger")
+                            .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                            .child(
+                                h_flex()
+                                    .gap_0p5()
+                                    .when(settings.show_branch_icon, |this| {
+                                        let (icon, icon_color) = icon_info;
+                                        this.child(
+                                            Icon::new(icon).size(IconSize::Small).color(icon_color),
+                                        )
+                                    })
+                                    .when_some(
+                                        linked_worktree_name.as_ref(),
+                                        |this, worktree_name| {
+                                            this.child(
+                                                Label::new(worktree_name)
+                                                    .size(LabelSize::Large)
+                                                    .color(Color::Muted),
+                                            )
+                                            .child(
+                                                Label::new("/").size(LabelSize::Large).color(
+                                                    Color::Custom(
+                                                        cx.theme().colors().text_muted.opacity(0.4),
+                                                    ),
+                                                ),
+                                            )
+                                        },
                                     )
                                     .child(
-                                        Label::new("/").size(LabelSize::Small).color(
-                                            Color::Custom(
-                                                cx.theme().colors().text_muted.opacity(0.4),
-                                            ),
-                                        ),
-                                    )
-                                })
-                                .child(
-                                    Label::new(branch_name)
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted),
-                                ),
-                        ),
-                    move |_window, cx| {
-                        Tooltip::with_meta(
-                            "Git Switcher",
-                            Some(&zed_actions::git::Branch),
-                            "Worktrees, Branches, and Stashes",
-                            cx,
-                        )
-                    },
-                )
-                .anchor(gpui::Corner::TopLeft),
+                                        Label::new(branch_name)
+                                            .size(LabelSize::Large)
+                                            .color(Color::Muted),
+                                    ),
+                            ),
+                        move |_window, cx| {
+                            Tooltip::with_meta(
+                                "Git Branches",
+                                Some(&zed_actions::git::Branch),
+                                "Branches and Git Actions",
+                                cx,
+                            )
+                        },
+                    )
+                    .anchor(gpui::Corner::TopLeft),
+            ),
         )
     }
 

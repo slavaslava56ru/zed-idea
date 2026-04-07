@@ -1,4 +1,4 @@
-use std::{collections::hash_map, sync::Arc, time::Duration};
+use std::{collections::hash_map, ops::Range, sync::Arc, time::Duration};
 
 use collections::{HashMap, HashSet};
 use futures::future::join_all;
@@ -6,7 +6,7 @@ use gpui::{
     App, Context, FontStyle, FontWeight, HighlightStyle, StrikethroughStyle, Task, UnderlineStyle,
 };
 use itertools::Itertools;
-use language::language_settings::LanguageSettings;
+use language::{BufferSnapshot, language_settings::LanguageSettings};
 use project::{
     lsp_store::{
         BufferSemanticToken, BufferSemanticTokens, RefreshForServer, SemanticTokenStylizer,
@@ -18,7 +18,7 @@ use settings::{
     SemanticTokenColorOverride, SemanticTokenFontStyle, SemanticTokenFontWeight,
     SemanticTokenRules, Settings as _,
 };
-use text::BufferId;
+use text::{BufferId, ToOffset as _};
 use theme::SyntaxTheme;
 use ui::ActiveTheme as _;
 
@@ -277,11 +277,14 @@ impl Editor {
                             }
                         }
 
-                        let language_name = editor
-                            .buffer()
-                            .read(cx)
-                            .buffer(buffer_id)
-                            .and_then(|buf| buf.read(cx).language().map(|l| l.name()));
+                        let Some(source_buffer) = editor.buffer().read(cx).buffer(buffer_id) else {
+                            continue;
+                        };
+                        let language_name =
+                            source_buffer.read(cx).language().map(|language| language.name());
+                        let buffer_snapshot = source_buffer.read(cx).snapshot();
+                        let injected_ranges =
+                            injection_ranges_for_semantic_tokens(&buffer_snapshot);
 
                         editor.display_map.update(cx, |display_map, cx| {
                             project.read(cx).lsp_store().update(cx, |lsp_store, cx| {
@@ -299,6 +302,8 @@ impl Editor {
                                     token_highlights.extend(buffer_into_editor_highlights(
                                         &server_tokens,
                                         stylizer,
+                                        &buffer_snapshot,
+                                        &injected_ranges,
                                         &multi_buffer_snapshot,
                                         &mut interner,
                                         cx,
@@ -323,22 +328,81 @@ impl Editor {
     }
 }
 
+fn injection_ranges_for_semantic_tokens(buffer_snapshot: &BufferSnapshot) -> Vec<Range<usize>> {
+    let Some(main_language) = buffer_snapshot.language() else {
+        return Vec::new();
+    };
+
+    let mut ranges = buffer_snapshot
+        .injections_intersecting_range(0..buffer_snapshot.len())
+        .filter_map(|(range, injected_language)| {
+            (!Arc::ptr_eq(injected_language, main_language)).then_some(range)
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_by_key(|range| range.start);
+
+    let mut merged_ranges: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(previous_range) = merged_ranges.last_mut() {
+            if range.start <= previous_range.end {
+                previous_range.end = previous_range.end.max(range.end);
+            } else {
+                merged_ranges.push(range);
+            }
+        } else {
+            merged_ranges.push(range);
+        }
+    }
+
+    merged_ranges
+}
+
+fn range_intersects_sorted_ranges(range: Range<usize>, sorted_ranges: &[Range<usize>]) -> bool {
+    if range.start >= range.end || sorted_ranges.is_empty() {
+        return false;
+    }
+
+    let first_possible_match =
+        sorted_ranges.partition_point(|candidate| candidate.end <= range.start);
+    sorted_ranges
+        .get(first_possible_match)
+        .is_some_and(|candidate| candidate.start < range.end)
+}
+
+fn semantic_token_is_injected(
+    token: &BufferSemanticToken,
+    buffer_snapshot: &BufferSnapshot,
+    injected_ranges: &[Range<usize>],
+) -> bool {
+    range_intersects_sorted_ranges(
+        token.range.start.to_offset(buffer_snapshot)..token.range.end.to_offset(buffer_snapshot),
+        injected_ranges,
+    )
+}
+
 fn buffer_into_editor_highlights<'a, 'b>(
     buffer_tokens: &'a [BufferSemanticToken],
     stylizer: &'a SemanticTokenStylizer,
+    buffer_snapshot: &'a BufferSnapshot,
+    injected_ranges: &'a [Range<usize>],
     multi_buffer_snapshot: &'a multi_buffer::MultiBufferSnapshot,
     interner: &'b mut HighlightStyleInterner,
     cx: &'a App,
 ) -> impl Iterator<Item = SemanticTokenHighlight> + use<'a, 'b> {
+    let visible_tokens = buffer_tokens
+        .iter()
+        .filter(move |token| !semantic_token_is_injected(token, buffer_snapshot, injected_ranges))
+        .collect::<Vec<_>>();
+
     multi_buffer_snapshot
         .text_anchors_to_visible_anchors(
-            buffer_tokens
+            visible_tokens
                 .iter()
                 .flat_map(|token| [token.range.start, token.range.end]),
         )
         .into_iter()
         .tuples::<(_, _)>()
-        .zip(buffer_tokens)
+        .zip(visible_tokens)
         .filter_map(|((multi_buffer_start, multi_buffer_end), token)| {
             let range = multi_buffer_start?..multi_buffer_end?;
             let style = convert_token(
@@ -2103,5 +2167,19 @@ mod tests {
                 })
                 .collect()
         })
+    }
+
+    #[test]
+    fn test_range_intersects_sorted_ranges() {
+        let ranges = vec![5..10, 20..30];
+
+        assert!(range_intersects_sorted_ranges(5..6, &ranges));
+        assert!(range_intersects_sorted_ranges(8..12, &ranges));
+        assert!(range_intersects_sorted_ranges(24..25, &ranges));
+
+        assert!(!range_intersects_sorted_ranges(0..5, &ranges));
+        assert!(!range_intersects_sorted_ranges(10..20, &ranges));
+        assert!(!range_intersects_sorted_ranges(30..35, &ranges));
+        assert!(!range_intersects_sorted_ranges(7..7, &ranges));
     }
 }

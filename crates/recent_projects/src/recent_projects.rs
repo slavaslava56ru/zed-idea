@@ -57,6 +57,8 @@ actions!(
     [ToggleActionsMenu, RemoveSelected, AddToWorkspace,]
 );
 
+const SCRATCH_WORKTREE_ROOT_NAME: &str = "scratch";
+
 #[derive(Clone, Debug)]
 pub struct RecentProjectEntry {
     pub name: SharedString,
@@ -150,7 +152,12 @@ pub async fn delete_recent_project(workspace_id: WorkspaceId, db: &WorkspaceDb) 
 
 fn get_open_folders(workspace: &Workspace, cx: &App) -> Vec<OpenFolderEntry> {
     let project = workspace.project().read(cx);
-    let visible_worktrees: Vec<_> = project.visible_worktrees(cx).collect();
+    let visible_worktrees: Vec<_> = project
+        .visible_worktrees(cx)
+        .filter(|worktree| {
+            worktree.read(cx).root_name().as_unix_str() != SCRATCH_WORKTREE_ROOT_NAME
+        })
+        .collect();
 
     if visible_worktrees.len() <= 1 {
         return Vec::new();
@@ -160,17 +167,14 @@ fn get_open_folders(workspace: &Workspace, cx: &App) -> Vec<OpenFolderEntry> {
         if let Some(repo) = project.active_repository(cx) {
             let repo = repo.read(cx);
             let repo_path = &repo.work_directory_abs_path;
-            for worktree in project.visible_worktrees(cx) {
+            for worktree in &visible_worktrees {
                 let worktree_path = worktree.read(cx).abs_path();
                 if worktree_path == *repo_path || worktree_path.starts_with(repo_path.as_ref()) {
                     return Some(worktree.read(cx).id());
                 }
             }
         }
-        project
-            .visible_worktrees(cx)
-            .next()
-            .map(|wt| wt.read(cx).id())
+        visible_worktrees.first().map(|wt| wt.read(cx).id())
     });
 
     let git_store = project.git_store().read(cx);

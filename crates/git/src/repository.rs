@@ -708,6 +708,7 @@ pub trait GitRepository: Send + Sync {
     fn create_branch(&self, name: String, base_branch: Option<String>)
     -> BoxFuture<'_, Result<()>>;
     fn rename_branch(&self, branch: String, new_name: String) -> BoxFuture<'_, Result<()>>;
+    fn merge_branch(&self, name: String) -> BoxFuture<'_, Result<()>>;
 
     fn delete_branch(&self, is_remote: bool, name: String) -> BoxFuture<'_, Result<()>>;
 
@@ -1802,6 +1803,17 @@ impl GitRepository for RealGitRepository {
                 git_binary?
                     .run(&["branch", "-m", &branch, &new_name])
                     .await?;
+                anyhow::Ok(())
+            })
+            .boxed()
+    }
+
+    fn merge_branch(&self, name: String) -> BoxFuture<'_, Result<()>> {
+        let git_binary = self.git_binary();
+
+        self.executor
+            .spawn(async move {
+                git_binary?.run(&["merge", "--no-edit", &name]).await?;
                 anyhow::Ok(())
             })
             .boxed()

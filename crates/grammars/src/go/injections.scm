@@ -15,6 +15,78 @@
     ] @injection.content
     (#set! injection.language "regex")))
 
+; AUTO-INJECT SQL FOR COMMON QUERY VARIABLES
+([
+  (const_spec
+    name: (identifier) @_name
+    "="
+    value: (expression_list
+      [
+        (interpreted_string_literal
+          (interpreted_string_literal_content) @injection.content)
+        (raw_string_literal
+          (raw_string_literal_content) @injection.content)
+      ]))
+  (var_spec
+    name: (identifier) @_name
+    "="
+    value: (expression_list
+      [
+        (interpreted_string_literal
+          (interpreted_string_literal_content) @injection.content)
+        (raw_string_literal
+          (raw_string_literal_content) @injection.content)
+      ]))
+  (assignment_statement
+    left: (expression_list
+      (identifier) @_name)
+    "="
+    right: (expression_list
+      [
+        (interpreted_string_literal
+          (interpreted_string_literal_content) @injection.content)
+        (raw_string_literal
+          (raw_string_literal_content) @injection.content)
+      ]))
+  (short_var_declaration
+    left: (expression_list
+      (identifier) @_name)
+    ":="
+    right: (expression_list
+      [
+        (interpreted_string_literal
+          (interpreted_string_literal_content) @injection.content)
+        (raw_string_literal
+          (raw_string_literal_content) @injection.content)
+      ]))
+]
+  (#match? @_name "(?i)^.*(?:sql|query|queries|stmt|statement|ddl)$")
+  (#set! injection.language "sql"))
+
+; AUTO-INJECT SQL FOR COMMON DATABASE METHODS
+(call_expression
+  function: (selector_expression
+    field: (field_identifier) @_method)
+  arguments: (argument_list
+    [
+      (interpreted_string_literal
+        (interpreted_string_literal_content) @injection.content)
+      (raw_string_literal
+        (raw_string_literal_content) @injection.content)
+    ])
+  (#match? @_method "(?i)^(query|queryrow|querycontext|queryrowcontext|exec|execcontext|prepare|preparecontext|mustexec|mustexeccontext|select|selectcontext|get|getcontext|namedexec|namedexeccontext|namedquery|namedquerycontext)$")
+  (#set! injection.language "sql"))
+
+; AUTO-INJECT SQL WHEN THE STRING CONTENT ITSELF LOOKS LIKE SQL
+([
+  (interpreted_string_literal
+    (interpreted_string_literal_content) @injection.content)
+  (raw_string_literal
+    (raw_string_literal_content) @injection.content)
+]
+  (#match? @injection.content "(?i)^\\s*(?:select|with|insert|update|delete|create\\s+(?:table|index|view|function|trigger)|alter\\s+(?:table|index|view|function|trigger)|drop\\s+(?:table|index|view|function|trigger))\\b")
+  (#set! injection.language "sql"))
+
 ; INJECT SQL
 ([
   (const_spec

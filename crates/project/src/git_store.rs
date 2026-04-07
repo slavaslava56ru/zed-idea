@@ -6228,6 +6228,22 @@ impl Repository {
         )
     }
 
+    pub fn merge_branch(&mut self, branch_name: String) -> oneshot::Receiver<Result<()>> {
+        self.send_job(
+            Some(format!("git merge --no-edit {branch_name}").into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState { backend, .. }) => {
+                        backend.merge_branch(branch_name).await
+                    }
+                    RepositoryState::Remote(_) => Err(anyhow!(
+                        "Merging branches is not supported for remote repositories"
+                    )),
+                }
+            },
+        )
+    }
+
     pub fn delete_branch(
         &mut self,
         is_remote: bool,

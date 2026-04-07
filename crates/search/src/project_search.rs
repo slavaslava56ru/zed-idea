@@ -27,7 +27,7 @@ use gpui::{
 };
 use itertools::Itertools;
 use language::{Buffer, Language, Point as BufferPoint, ToPoint};
-use menu::Confirm;
+use menu::{Confirm, SelectNext, SelectPrevious};
 use multi_buffer;
 use project::{
     Project, ProjectItem, ProjectPath, SearchResultLimits, SearchResults,
@@ -901,6 +901,33 @@ impl ProjectSearchModal {
         self.rebuild_preview_editor(window, cx);
     }
 
+    fn select_next_result(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
+        if self.results.is_empty() {
+            return;
+        }
+
+        let selected_index = self.selected_match_index.unwrap_or(0);
+        let next_index = (selected_index + 1).min(self.results.len() - 1);
+        self.select_result(next_index, window, cx);
+        cx.stop_propagation();
+    }
+
+    fn select_previous_result(
+        &mut self,
+        _: &SelectPrevious,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.results.is_empty() {
+            return;
+        }
+
+        let selected_index = self.selected_match_index.unwrap_or(0);
+        let previous_index = selected_index.saturating_sub(1);
+        self.select_result(previous_index, window, cx);
+        cx.stop_propagation();
+    }
+
     fn open_result(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         enum OpenTarget {
             ProjectPath(ProjectPath),
@@ -956,6 +983,19 @@ impl ProjectSearchModal {
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
+    }
+
+    fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self
+            .selected_match_index
+            .or_else(|| (!self.results.is_empty()).then_some(0))
+        {
+            self.open_result(index, window, cx);
+            cx.stop_propagation();
+        } else if self.open_results_in_new_tab {
+            self.open_in_find_window(window, cx);
+            cx.stop_propagation();
+        }
     }
 
     fn rebuild_preview_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1213,16 +1253,13 @@ impl Render for ProjectSearchModal {
             .overflow_hidden()
             .key_context("ProjectSearchModal")
             .track_focus(&self.focus_handle)
-            .capture_action(cx.listener(|this, _: &menu::Confirm, window, cx| {
-                if this.open_results_in_new_tab {
-                    this.open_in_find_window(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
+            .capture_action(cx.listener(Self::confirm))
             .on_action(cx.listener(|this, _: &SearchInNew, window, cx| {
                 this.open_in_find_window(window, cx);
                 cx.stop_propagation();
             }))
+            .on_action(cx.listener(Self::select_next_result))
+            .on_action(cx.listener(Self::select_previous_result))
             .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| {
                 cx.emit(DismissEvent);
                 cx.stop_propagation();
@@ -2740,6 +2777,14 @@ impl ProjectSearchBar {
         }
     }
 
+    fn active_search_modal(&self, cx: &App) -> Option<Entity<ProjectSearchModal>> {
+        let workspace = self
+            .active_project_search
+            .as_ref()
+            .and_then(|search_view| search_view.read(cx).workspace.upgrade())?;
+        workspace.read(cx).active_modal::<ProjectSearchModal>(cx)
+    }
+
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search_view) = self.active_project_search.as_ref() {
             search_view.update(cx, |search_view, cx| {
@@ -2921,6 +2966,16 @@ impl ProjectSearchBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(search_modal) = self.active_search_modal(cx)
+            && !search_modal.read(cx).results.is_empty()
+        {
+            search_modal.update(cx, |search_modal, cx| {
+                search_modal.select_next_result(&SelectNext, window, cx);
+            });
+            cx.stop_propagation();
+            return;
+        }
+
         if let Some(search_view) = self.active_project_search.as_ref() {
             search_view.update(cx, |search_view, cx| {
                 for (editor, kind) in [
@@ -2969,6 +3024,16 @@ impl ProjectSearchBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(search_modal) = self.active_search_modal(cx)
+            && !search_modal.read(cx).results.is_empty()
+        {
+            search_modal.update(cx, |search_modal, cx| {
+                search_modal.select_previous_result(&SelectPrevious, window, cx);
+            });
+            cx.stop_propagation();
+            return;
+        }
+
         if let Some(search_view) = self.active_project_search.as_ref() {
             search_view.update(cx, |search_view, cx| {
                 for (editor, kind) in [
@@ -4992,6 +5057,156 @@ pub mod tests {
                 editor.display_text(cx),
                 "const DUP: usize = two::TWO + two::TWO;\n",
                 "Opening a result from the modal should load the matched file"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_project_search_modal_arrow_keys_select_results(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/dir"),
+            json!({
+                "a.rs": "const HIT_ALPHA: usize = 1;\n",
+                "b.rs": "const HIT_BETA: usize = 2;\n",
+            }),
+        )
+        .await;
+        let project = Project::test(fs.clone(), ["/dir".as_ref()], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+        cx.dispatch_action(DeploySearch::find());
+
+        let Some(search_modal) =
+            cx.read(|cx| workspace.read(cx).active_modal::<ProjectSearchModal>(cx))
+        else {
+            panic!("Search modal expected to appear after deploy search action")
+        };
+
+        window
+            .update(cx, |_, window, cx| {
+                search_modal.update(cx, |search_modal, cx| {
+                    search_modal.search_view.update(cx, |search_view, cx| {
+                        search_view.query_editor.update(cx, |query_editor, cx| {
+                            query_editor.set_text("HIT_", window, cx);
+                        });
+                    });
+                });
+            })
+            .unwrap();
+
+        cx.executor()
+            .advance_clock(LIVE_SEARCH_DEBOUNCE + Duration::from_millis(100));
+        cx.background_executor.run_until_parked();
+
+        search_modal.update(cx, |search_modal, _cx| {
+            assert_eq!(search_modal.selected_match_index, Some(0));
+            assert_eq!(search_modal.results[0].file_name.as_ref(), "a.rs");
+        });
+
+        cx.dispatch_action(NextHistoryQuery);
+
+        search_modal.update(cx, |search_modal, _cx| {
+            assert_eq!(search_modal.selected_match_index, Some(1));
+            assert_eq!(search_modal.results[1].file_name.as_ref(), "b.rs");
+        });
+
+        cx.dispatch_action(PreviousHistoryQuery);
+
+        search_modal.update(cx, |search_modal, _cx| {
+            assert_eq!(search_modal.selected_match_index, Some(0));
+            assert_eq!(search_modal.results[0].file_name.as_ref(), "a.rs");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_project_search_modal_enter_opens_selected_result(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/dir"),
+            json!({
+                "a.rs": "const HIT_ALPHA: usize = 1;\n",
+                "b.rs": "fn main() {\n    const HIT_BETA: usize = 2;\n}\n",
+            }),
+        )
+        .await;
+        let project = Project::test(fs.clone(), ["/dir".as_ref()], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+        cx.dispatch_action(DeploySearch::find());
+
+        let Some(search_modal) =
+            cx.read(|cx| workspace.read(cx).active_modal::<ProjectSearchModal>(cx))
+        else {
+            panic!("Search modal expected to appear after deploy search action")
+        };
+
+        window
+            .update(cx, |_, window, cx| {
+                search_modal.update(cx, |search_modal, cx| {
+                    search_modal.search_view.update(cx, |search_view, cx| {
+                        search_view.query_editor.update(cx, |query_editor, cx| {
+                            query_editor.set_text("HIT_", window, cx);
+                        });
+                    });
+                });
+            })
+            .unwrap();
+
+        cx.executor()
+            .advance_clock(LIVE_SEARCH_DEBOUNCE + Duration::from_millis(100));
+        cx.background_executor.run_until_parked();
+
+        cx.dispatch_action(NextHistoryQuery);
+        cx.dispatch_action(Confirm);
+
+        cx.run_until_parked();
+        cx.background_executor.run_until_parked();
+        cx.run_until_parked();
+
+        assert!(
+            cx.read(|cx| workspace.read(cx).active_modal::<ProjectSearchModal>(cx))
+                .is_none(),
+            "Confirming a selected modal result should dismiss the modal"
+        );
+
+        let active_editor = cx
+            .read(|cx| {
+                workspace
+                    .read(cx)
+                    .active_item(cx)
+                    .and_then(|item| item.downcast::<Editor>())
+            })
+            .expect("Confirming a selected modal result should activate an editor");
+
+        active_editor.update(cx, |editor, cx| {
+            assert_eq!(
+                editor.display_text(cx),
+                "fn main() {\n    const HIT_BETA: usize = 2;\n}\n",
+                "Confirming from the modal should open the selected file"
+            );
+
+            let snapshot = editor.buffer().read(cx).snapshot(cx);
+            let (cursor_anchor, buffer_snapshot) = snapshot
+                .anchor_to_buffer_anchor(editor.selections.newest_anchor().head())
+                .expect("Opened search result should place the cursor in the target buffer");
+            let cursor_position = cursor_anchor.to_point(buffer_snapshot);
+
+            assert_eq!(
+                cursor_position.row, 1,
+                "Confirming from the modal should jump to the matched line"
             );
         });
     }

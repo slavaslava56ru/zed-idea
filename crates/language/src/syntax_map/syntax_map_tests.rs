@@ -935,6 +935,92 @@ fn test_comment_triggered_injection_toggle(cx: &mut App) {
 }
 
 #[gpui::test]
+fn test_go_query_variable_triggers_sql_injection(cx: &mut App) {
+    let registry = Arc::new(LanguageRegistry::test(cx.background_executor().clone()));
+
+    let go = Arc::new(go_lang());
+    registry.add(go.clone());
+
+    let mut buffer = Buffer::new(
+        ReplicaId::LOCAL,
+        BufferId::new(1).unwrap(),
+        r#"
+            package main
+
+            func run() {
+                text := `
+                    not actually sql
+                `
+            }
+        "#
+        .unindent(),
+    );
+
+    let mut syntax_map = SyntaxMap::new(&buffer);
+    syntax_map.set_language_registry(registry);
+    syntax_map.reparse(go.clone(), &buffer);
+
+    assert!(
+        !syntax_map.contains_unknown_injections(),
+        "Expected no unknown injections for a non-query variable"
+    );
+
+    let text_range = range_for_text(&buffer, "text :=");
+    buffer.edit([(text_range.start..text_range.start + 4, "query")]);
+    syntax_map.interpolate(&buffer);
+    syntax_map.reparse(go.clone(), &buffer);
+
+    assert!(
+        syntax_map.contains_unknown_injections(),
+        "Expected SQL injection for a query-like Go variable name"
+    );
+
+    let query_range = range_for_text(&buffer, "query :=");
+    buffer.edit([(query_range.start..query_range.start + 5, "text")]);
+    syntax_map.interpolate(&buffer);
+    syntax_map.reparse(go, &buffer);
+
+    assert!(
+        !syntax_map.contains_unknown_injections(),
+        "Expected SQL injection to be removed after renaming the variable"
+    );
+}
+
+#[gpui::test]
+fn test_go_sql_content_triggers_sql_injection_without_query_variable(cx: &mut App) {
+    let registry = Arc::new(LanguageRegistry::test(cx.background_executor().clone()));
+
+    let go = Arc::new(go_lang());
+    registry.add(go.clone());
+
+    let buffer = Buffer::new(
+        ReplicaId::LOCAL,
+        BufferId::new(1).unwrap(),
+        r#"
+            package main
+
+            func run() {
+                text := `
+                    SELECT uuid, created_at
+                    FROM arena_sessions
+                    WHERE uuid = ?
+                `
+            }
+        "#
+        .unindent(),
+    );
+
+    let mut syntax_map = SyntaxMap::new(&buffer);
+    syntax_map.set_language_registry(registry);
+    syntax_map.reparse(go, &buffer);
+
+    assert!(
+        syntax_map.contains_unknown_injections(),
+        "Expected SQL injection when a Go string literal starts with SQL keywords"
+    );
+}
+
+#[gpui::test]
 fn test_syntax_map_languages_loading_with_erb(cx: &mut App) {
     let text = r#"
         <body>
@@ -1497,6 +1583,28 @@ fn python_lang() -> Language {
         ..Default::default()
     })
     .expect("Could not parse Python queries")
+}
+
+fn go_lang() -> Language {
+    Language::new(
+        LanguageConfig {
+            name: "Go".into(),
+            matcher: LanguageMatcher {
+                path_suffixes: vec!["go".to_string()],
+                ..Default::default()
+            },
+            line_comments: vec!["// ".into()],
+            ..Default::default()
+        },
+        Some(tree_sitter_go::LANGUAGE.into()),
+    )
+    .with_queries(LanguageQueries {
+        injections: Some(Cow::from(include_str!(
+            "../../../grammars/src/go/injections.scm"
+        ))),
+        ..Default::default()
+    })
+    .expect("Could not parse Go queries")
 }
 
 fn comment_lang() -> Language {

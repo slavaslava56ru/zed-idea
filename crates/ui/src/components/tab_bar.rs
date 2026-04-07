@@ -9,6 +9,7 @@ pub struct TabBar {
     id: ElementId,
     start_children: SmallVec<[AnyElement; 2]>,
     children: SmallVec<[AnyElement; 2]>,
+    tabs_end_children: SmallVec<[AnyElement; 2]>,
     end_children: SmallVec<[AnyElement; 2]>,
     scroll_handle: Option<ScrollHandle>,
 }
@@ -19,6 +20,7 @@ impl TabBar {
             id: id.into(),
             start_children: SmallVec::new(),
             children: SmallVec::new(),
+            tabs_end_children: SmallVec::new(),
             end_children: SmallVec::new(),
             scroll_handle: None,
         }
@@ -59,6 +61,34 @@ impl TabBar {
 
     pub fn end_children_mut(&mut self) -> &mut SmallVec<[AnyElement; 2]> {
         &mut self.end_children
+    }
+
+    pub fn tabs_end_children_mut(&mut self) -> &mut SmallVec<[AnyElement; 2]> {
+        &mut self.tabs_end_children
+    }
+
+    pub fn tabs_end_child(mut self, tabs_end_child: impl IntoElement) -> Self
+    where
+        Self: Sized,
+    {
+        self.tabs_end_children_mut()
+            .push(tabs_end_child.into_element().into_any());
+        self
+    }
+
+    pub fn tabs_end_children(
+        mut self,
+        tabs_end_children: impl IntoIterator<Item = impl IntoElement>,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.tabs_end_children_mut().extend(
+            tabs_end_children
+                .into_iter()
+                .map(|child| child.into_any_element()),
+        );
+        self
     }
 
     pub fn end_child(mut self, end_child: impl IntoElement) -> Self
@@ -115,6 +145,7 @@ impl RenderOnce for TabBar {
                 div()
                     .relative()
                     .flex_1()
+                    .min_w_0()
                     .h_full()
                     .overflow_x_hidden()
                     .child(
@@ -128,24 +159,36 @@ impl RenderOnce for TabBar {
                     )
                     .child(
                         h_flex()
-                            .id("tabs")
-                            .flex_grow()
-                            .overflow_x_scroll()
-                            .when_some(self.scroll_handle, |cx, scroll_handle| {
-                                cx.track_scroll(&scroll_handle)
-                            })
-                            .children(self.children),
+                            .w_full()
+                            .h_full()
+                            .min_w_0()
+                            .child(
+                                h_flex()
+                                    .id("tabs")
+                                    .min_w_0()
+                                    .when(self.tabs_end_children.is_empty(), |this| {
+                                        this.flex_grow()
+                                    })
+                                    .when(!self.tabs_end_children.is_empty(), |this| {
+                                        this.flex_shrink()
+                                    })
+                                    .overflow_x_scroll()
+                                    .when_some(self.scroll_handle, |cx, scroll_handle| {
+                                        cx.track_scroll(&scroll_handle)
+                                    })
+                                    .children(self.children),
+                            )
+                            .when(!self.tabs_end_children.is_empty(), |this| {
+                                this.child(h_flex().flex_none().children(self.tabs_end_children))
+                            }),
                     ),
             )
             .when(!self.end_children.is_empty(), |this| {
                 this.child(
                     h_flex()
                         .flex_none()
-                        .gap(DynamicSpacing::Base04.rems(cx))
-                        .px(DynamicSpacing::Base06.rems(cx))
                         .border_color(cx.theme().colors().border)
                         .border_b_1()
-                        .border_l_1()
                         .children(self.end_children),
                 )
             })

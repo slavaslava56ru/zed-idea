@@ -1678,9 +1678,9 @@ impl Item for NotebookEditor {
 
     fn tab_content(&self, params: TabContentParams, window: &Window, cx: &App) -> AnyElement {
         Label::new(self.tab_content_text(params.detail.unwrap_or(0), cx))
+            .size(LabelSize::Large)
             .single_line()
             .color(params.text_color())
-            .when(params.preview, |this| this.italic())
             .into_any_element()
     }
 

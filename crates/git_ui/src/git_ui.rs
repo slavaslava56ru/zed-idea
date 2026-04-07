@@ -311,6 +311,118 @@ pub fn git_status_icon(status: FileStatus) -> impl IntoElement {
     GitStatusIcon::new(status)
 }
 
+pub(crate) fn open_create_branch_modal(
+    workspace: &mut Workspace,
+    base_branch: String,
+    repo: Entity<Repository>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    workspace.toggle_modal(window, cx, move |window, cx| {
+        CreateBranchModal::new(base_branch.clone(), repo.clone(), window, cx)
+    });
+}
+
+pub(crate) fn open_rename_branch_modal(
+    workspace: &mut Workspace,
+    branch_name: String,
+    repo: Entity<Repository>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    workspace.toggle_modal(window, cx, move |window, cx| {
+        RenameBranchModal::new(branch_name.clone(), repo.clone(), window, cx)
+    });
+}
+
+struct CreateBranchModal {
+    base_branch: SharedString,
+    editor: Entity<Editor>,
+    repo: Entity<Repository>,
+}
+
+impl CreateBranchModal {
+    fn new(
+        base_branch: String,
+        repo: Entity<Repository>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let editor = cx.new(|cx| {
+            let mut editor = Editor::single_line(window, cx);
+            editor.set_placeholder_text("Enter new branch name", window, cx);
+            editor
+        });
+        Self {
+            base_branch: base_branch.into(),
+            editor,
+            repo,
+        }
+    }
+
+    fn cancel(&mut self, _: &Cancel, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(DismissEvent);
+    }
+
+    fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        let new_name = self.editor.read(cx).text(cx).replace(' ', "-");
+        if new_name.is_empty() {
+            cx.emit(DismissEvent);
+            return;
+        }
+
+        let repo = self.repo.clone();
+        let base_branch = self.base_branch.to_string();
+        cx.spawn(async move |_, cx| {
+            match repo
+                .update(cx, |repo, _| {
+                    repo.create_branch(new_name.clone(), Some(base_branch.clone()))
+                })
+                .await
+            {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(anyhow!("Operation was canceled")),
+            }
+        })
+        .detach_and_prompt_err("Failed to create branch", window, cx, |_, _, _| None);
+        cx.emit(DismissEvent);
+    }
+}
+
+impl EventEmitter<DismissEvent> for CreateBranchModal {}
+impl ModalView for CreateBranchModal {}
+impl Focusable for CreateBranchModal {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.editor.focus_handle(cx)
+    }
+}
+
+impl Render for CreateBranchModal {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .key_context("CreateBranchModal")
+            .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::confirm))
+            .elevation_2(cx)
+            .w(rems(34.))
+            .child(
+                h_flex()
+                    .px_3()
+                    .pt_2()
+                    .pb_1()
+                    .w_full()
+                    .gap_1p5()
+                    .child(Icon::new(IconName::GitBranchPlus).size(IconSize::XSmall))
+                    .child(
+                        Headline::new(format!("New Branch From ({})", self.base_branch))
+                            .size(HeadlineSize::XSmall),
+                    ),
+            )
+            .child(div().px_3().pb_3().w_full().child(self.editor.clone()))
+    }
+}
+
 struct RenameBranchModal {
     current_branch: SharedString,
     editor: Entity<Editor>,
@@ -422,9 +534,7 @@ fn rename_current_branch(
         return;
     };
 
-    workspace.toggle_modal(window, cx, |window, cx| {
-        RenameBranchModal::new(current_branch_name, repo, window, cx)
-    });
+    open_rename_branch_modal(workspace, current_branch_name, repo, window, cx);
 }
 
 fn render_remote_button(

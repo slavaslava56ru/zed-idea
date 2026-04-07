@@ -128,11 +128,11 @@
   // May take 3 values:
   //  1. All workspaces open during last session
   //         "restore_on_startup": "last_session"
-  //  2. The workspace opened
+  //  2. The last workspace opened
   //         "restore_on_startup": "last_workspace",
   //  3. Do not restore previous workspaces
   //         "restore_on_startup": "none",
-  "restore_on_startup": "last_session",
+  "restore_on_startup": "last_workspace",
   // Whether to attempt to restore previous file's state when opening it again.
   // The state is stored per pane.
   // When disabled, defaults are applied instead of the state restoration.
@@ -1215,7 +1215,7 @@
     // One of: ["right", "left"]
     "close_position": "right",
     // Whether to show the file icon for a tab.
-    "file_icons": false,
+    "file_icons": true,
     // Controls the appearance behavior of the tab's close button.
     //
     // 1. Show it just upon hovering the tab. (default)

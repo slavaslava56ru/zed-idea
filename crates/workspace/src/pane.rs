@@ -422,7 +422,7 @@ pub struct Pane {
             &mut Pane,
             &mut Window,
             &mut Context<Pane>,
-        ) -> (Option<AnyElement>, Option<AnyElement>),
+        ) -> (Option<AnyElement>, Option<AnyElement>, Option<AnyElement>),
     >,
     render_tab_bar: Rc<dyn Fn(&mut Pane, &mut Window, &mut Context<Pane>) -> AnyElement>,
     show_tab_bar_buttons: bool,
@@ -876,7 +876,7 @@ impl Pane {
                 &mut Pane,
                 &mut Window,
                 &mut Context<Pane>,
-            ) -> (Option<AnyElement>, Option<AnyElement>),
+            ) -> (Option<AnyElement>, Option<AnyElement>, Option<AnyElement>),
     {
         self.render_tab_bar_buttons = Rc::new(render);
         cx.notify();
@@ -3457,13 +3457,28 @@ impl Pane {
         }
     }
 
+    fn tab_bar_button_children(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Pane>,
+    ) -> (Option<AnyElement>, Option<AnyElement>, Option<AnyElement>) {
+        if self.show_tab_bar_buttons {
+            let render_tab_buttons = self.render_tab_bar_buttons.clone();
+            render_tab_buttons(self, window, cx)
+        } else {
+            (None, None, None)
+        }
+    }
+
     fn configure_tab_bar_start(
         &mut self,
         tab_bar: TabBar,
         navigate_backward: IconButton,
         navigate_forward: IconButton,
-        window: &mut Window,
-        cx: &mut Context<Pane>,
+        left_children: Option<AnyElement>,
+        right_children: Option<AnyElement>,
+        _window: &mut Window,
+        _cx: &mut Context<Pane>,
     ) -> TabBar {
         tab_bar
             .when(
@@ -3474,17 +3489,8 @@ impl Pane {
                         .start_child(navigate_forward)
                 },
             )
-            .map(|tab_bar| {
-                if self.show_tab_bar_buttons {
-                    let render_tab_buttons = self.render_tab_bar_buttons.clone();
-                    let (left_children, right_children) = render_tab_buttons(self, window, cx);
-                    tab_bar
-                        .start_children(left_children)
-                        .end_children(right_children)
-                } else {
-                    tab_bar
-                }
-            })
+            .start_children(left_children)
+            .end_children(right_children)
     }
 
     fn render_single_row_tab_bar(
@@ -3497,11 +3503,15 @@ impl Pane {
         window: &mut Window,
         cx: &mut Context<Pane>,
     ) -> AnyElement {
+        let (left_children, tabs_children, right_children) =
+            self.tab_bar_button_children(window, cx);
         let tab_bar = self
             .configure_tab_bar_start(
                 TabBar::new("tab_bar"),
                 navigate_backward,
                 navigate_forward,
+                left_children,
+                right_children,
                 window,
                 cx,
             )
@@ -3521,7 +3531,12 @@ impl Pane {
                             .border_color(cx.theme().colors().border)
                     })
             }))
-            .child(self.render_unpinned_tabs_container(unpinned_tabs, tab_count, cx));
+            .child(self.render_unpinned_tabs_container(
+                unpinned_tabs,
+                tab_count,
+                tabs_children,
+                cx,
+            ));
         tab_bar.into_any_element()
     }
 
@@ -3535,11 +3550,15 @@ impl Pane {
         window: &mut Window,
         cx: &mut Context<Pane>,
     ) -> AnyElement {
+        let (left_children, tabs_children, right_children) =
+            self.tab_bar_button_children(window, cx);
         let pinned_tab_bar = self
             .configure_tab_bar_start(
                 TabBar::new("pinned_tab_bar"),
                 navigate_backward,
                 navigate_forward,
+                left_children,
+                right_children,
                 window,
                 cx,
             )
@@ -3560,6 +3579,7 @@ impl Pane {
                 TabBar::new("unpinned_tab_bar").child(self.render_unpinned_tabs_container(
                     unpinned_tabs,
                     tab_count,
+                    tabs_children,
                     cx,
                 )),
             )
@@ -3570,6 +3590,7 @@ impl Pane {
         &mut self,
         unpinned_tabs: Vec<AnyElement>,
         tab_count: usize,
+        tabs_children: Option<AnyElement>,
         cx: &mut Context<Pane>,
     ) -> impl IntoElement {
         h_flex()
@@ -3581,6 +3602,7 @@ impl Pane {
                 this.suppress_scroll = true;
             }))
             .children(unpinned_tabs)
+            .children(tabs_children)
             .child(self.render_tab_bar_drop_target(tab_count, cx))
     }
 
@@ -4153,9 +4175,9 @@ fn default_render_tab_bar_buttons(
     pane: &mut Pane,
     window: &mut Window,
     cx: &mut Context<Pane>,
-) -> (Option<AnyElement>, Option<AnyElement>) {
+) -> (Option<AnyElement>, Option<AnyElement>, Option<AnyElement>) {
     if !pane.has_focus(window, cx) && !pane.context_menu_focused(window, cx) {
-        return (None, None);
+        return (None, None, None);
     }
     let (can_clone, can_split_move) = match pane.active_item() {
         Some(active_item) if active_item.can_split(cx) => (true, false),
@@ -4165,8 +4187,12 @@ fn default_render_tab_bar_buttons(
     // Ideally we would return a vec of elements here to pass directly to the [TabBar]'s
     // `end_slot`, but due to needing a view here that isn't possible.
     let right_children = h_flex()
+        .flex_none()
         // Instead we need to replicate the spacing from the [TabBar]'s `end_slot` here.
         .gap(DynamicSpacing::Base04.rems(cx))
+        .px(DynamicSpacing::Base06.rems(cx))
+        .border_color(cx.theme().colors().border)
+        .border_l_1()
         .child(
             PopoverMenu::new("pane-tab-bar-popover-menu")
                 .trigger_with_tooltip(
@@ -4242,7 +4268,7 @@ fn default_render_tab_bar_buttons(
         })
         .into_any_element()
         .into();
-    (None, right_children)
+    (None, None, right_children)
 }
 
 impl Focusable for Pane {

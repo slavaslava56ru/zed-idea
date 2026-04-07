@@ -101,6 +101,61 @@ impl ProjectDiff {
         workspace::register_serializable_item::<ProjectDiff>(cx);
     }
 
+    pub(crate) fn open_branch_diff_for_ref(
+        workspace: &mut Workspace,
+        repository: Option<Entity<Repository>>,
+        base_ref: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) {
+        telemetry::event!("Git Branch Diff Opened");
+        let project = workspace.project().clone();
+        let repository = repository.or_else(|| resolve_active_repository(workspace, cx));
+
+        let existing = workspace
+            .items_of_type::<Self>(cx)
+            .find(|item| matches!(item.read(cx).diff_base(cx), DiffBase::Merge { .. }));
+        if let Some(existing) = existing {
+            existing.update(cx, |project_diff, cx| {
+                project_diff.branch_diff.update(cx, |branch_diff, cx| {
+                    branch_diff.set_diff_base(
+                        DiffBase::Merge {
+                            base_ref: base_ref.clone(),
+                        },
+                        cx,
+                    );
+                    branch_diff.set_repo(repository.clone(), cx);
+                });
+            });
+            workspace.activate_item(&existing, true, true, window, cx);
+            return;
+        }
+
+        let workspace_handle = cx.entity();
+        let branch_diff = cx.new(|cx| {
+            let mut branch_diff = branch_diff::BranchDiff::new(
+                DiffBase::Merge {
+                    base_ref: base_ref.clone(),
+                },
+                project.clone(),
+                window,
+                cx,
+            );
+            branch_diff.set_repo(repository.clone(), cx);
+            branch_diff
+        });
+        let project_diff = cx.new(|cx| {
+            Self::new_impl(
+                branch_diff,
+                project.clone(),
+                workspace_handle.clone(),
+                window,
+                cx,
+            )
+        });
+        workspace.add_item_to_active_pane(Box::new(project_diff), None, true, window, cx);
+    }
+
     fn deploy(
         workspace: &mut Workspace,
         _: &Diff,

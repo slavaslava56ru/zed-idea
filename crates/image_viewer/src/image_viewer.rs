@@ -494,9 +494,9 @@ impl Item for ImageView {
         };
 
         Label::new(self.tab_content_text(params.detail.unwrap_or_default(), cx))
+            .size(LabelSize::Large)
             .single_line()
             .color(label_color)
-            .when(params.preview, |this| this.italic())
             .into_any_element()
     }
 

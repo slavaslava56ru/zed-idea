@@ -137,6 +137,34 @@ impl TerminalPanel {
         let assistant_tab_bar_button = self.assistant_tab_bar_button.clone();
         terminal_pane.update(cx, |pane, cx| {
             pane.set_render_tab_bar_buttons(cx, move |pane, window, cx| {
+                let new_terminal_focus_handle = pane.focus_handle(cx);
+                let tabs_end_children = h_flex()
+                    .flex_none()
+                    .border_l_1()
+                    .border_color(cx.theme().colors().border)
+                    .child({
+                        let click_focus_handle = new_terminal_focus_handle.clone();
+                        let tooltip_focus_handle = new_terminal_focus_handle.clone();
+                        IconButton::new("plus", IconName::Plus)
+                            .icon_size(IconSize::Small)
+                            .on_click(move |_, window, cx| {
+                                click_focus_handle.dispatch_action(
+                                    &workspace::NewTerminal::default(),
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .tooltip(move |_window, cx| {
+                                Tooltip::for_action_in(
+                                    "New Terminal",
+                                    &workspace::NewTerminal::default(),
+                                    &tooltip_focus_handle,
+                                    cx,
+                                )
+                            })
+                    })
+                    .into_any_element()
+                    .into();
                 let split_context = pane
                     .active_item()
                     .and_then(|item| item.downcast::<TerminalView>())
@@ -149,39 +177,15 @@ impl TerminalPanel {
                     && !pane.context_menu_focused(window, cx)
                     && !has_focused_rename_editor
                 {
-                    return (None, None);
+                    return (None, tabs_end_children, None);
                 }
-                let focus_handle = pane.focus_handle(cx);
                 let right_children = h_flex()
+                    .flex_none()
                     .gap(DynamicSpacing::Base02.rems(cx))
-                    .child(
-                        PopoverMenu::new("terminal-tab-bar-popover-menu")
-                            .trigger_with_tooltip(
-                                IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
-                                Tooltip::text("New…"),
-                            )
-                            .anchor(Corner::TopRight)
-                            .with_handle(pane.new_item_context_menu_handle.clone())
-                            .menu(move |window, cx| {
-                                let focus_handle = focus_handle.clone();
-                                let menu = ContextMenu::build(window, cx, |menu, _, _| {
-                                    menu.context(focus_handle.clone())
-                                        .action(
-                                            "New Terminal",
-                                            workspace::NewTerminal::default().boxed_clone(),
-                                        )
-                                        // We want the focus to go back to terminal panel once task modal is dismissed,
-                                        // hence we focus that first. Otherwise, we'd end up without a focused element, as
-                                        // context menu will be gone the moment we spawn the modal.
-                                        .action(
-                                            "Spawn Task",
-                                            zed_actions::Spawn::modal().boxed_clone(),
-                                        )
-                                });
-
-                                Some(menu)
-                            }),
-                    )
+                    .pl(DynamicSpacing::Base06.rems(cx))
+                    .pr(DynamicSpacing::Base06.rems(cx))
+                    .border_l_1()
+                    .border_color(cx.theme().colors().border)
                     .children(assistant_tab_bar_button.clone())
                     .child(
                         PopoverMenu::new("terminal-pane-tab-bar-split")
@@ -227,7 +231,7 @@ impl TerminalPanel {
                     })
                     .into_any_element()
                     .into();
-                (None, right_children)
+                (None, tabs_end_children, right_children)
             });
         });
     }

@@ -10842,7 +10842,6 @@ impl Element for EditorElement {
                         window,
                         cx,
                     );
-
                     if !cx.has_active_drag() {
                         self.layout_hover_popovers(
                             &snapshot,

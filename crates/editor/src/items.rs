@@ -744,8 +744,9 @@ impl Item for Editor {
                     &self.title(cx),
                     MAX_TAB_TITLE_LEN,
                 ))
+                .size(LabelSize::Large)
+                .single_line()
                 .color(label_color)
-                .when(params.preview, |this| this.italic())
                 .when(was_deleted, |this| this.strikethrough()),
             )
             .when_some(description, |this, description| {

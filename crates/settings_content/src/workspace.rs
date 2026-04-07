@@ -47,7 +47,7 @@ pub struct WorkspaceSettingsContent {
     pub autosave: Option<AutosaveSetting>,
     /// Controls previous session restoration in freshly launched Zed instance.
     /// Values: empty_tab, last_workspace, last_session, launchpad
-    /// Default: last_session
+    /// Default: last_workspace
     pub restore_on_startup: Option<RestoreOnStartupBehavior>,
     /// Whether to attempt to restore previous file's state when opening it again.
     /// The state is stored per pane.
@@ -140,7 +140,7 @@ pub struct ItemSettingsContent {
     pub close_position: Option<ClosePosition>,
     /// Whether to show the file icon for a tab.
     ///
-    /// Default: false
+    /// Default: true
     pub file_icons: Option<bool>,
     /// What to do after closing the current tab.
     ///
@@ -161,7 +161,8 @@ pub struct ItemSettingsContent {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
 pub struct PreviewTabsSettingsContent {
     /// Whether to show opened editors as preview tabs.
-    /// Preview tabs do not stay open, are reused until explicitly set to be kept open opened (via double-click or editing) and show file names in italic.
+    /// Preview tabs do not stay open and are reused until explicitly kept open
+    /// (via double-click or editing).
     ///
     /// Default: true
     pub enabled: Option<bool>,
@@ -399,9 +400,9 @@ pub enum RestoreOnStartupBehavior {
     #[serde(alias = "none")]
     EmptyTab,
     /// Restore the workspace that was closed last.
+    #[default]
     LastWorkspace,
     /// Restore all workspaces that were open when quitting Zed.
-    #[default]
     LastSession,
     /// Show the launchpad with recent projects (no tabs).
     Launchpad,

@@ -688,6 +688,18 @@ impl GitRepository for FakeGitRepository {
         })
     }
 
+    fn merge_branch(&self, name: String) -> BoxFuture<'_, Result<()>> {
+        self.with_state_async(false, move |state| {
+            if !state.branches.contains(&name) {
+                bail!("no such branch: {name}");
+            }
+            if state.current_branch_name.is_none() {
+                bail!("no current branch");
+            }
+            Ok(())
+        })
+    }
+
     fn delete_branch(&self, _is_remote: bool, name: String) -> BoxFuture<'_, Result<()>> {
         self.with_state_async(true, move |state| {
             if !state.branches.remove(&name) {
